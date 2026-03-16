@@ -106,3 +106,28 @@ class ComposePromptResponse(BaseModel):
     prompt: str
     negative_prompt: str
     trace: PromptTrace
+
+
+class ProductReference(BaseModel):
+    id: str
+    title: str
+    image_url: str
+    source_url: str
+    filename: str
+    category: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+
+
+class ImageSlotValuesResponse(BaseModel):
+    colorPalette: Dict[str, float]
+    motif: Dict[str, float]
+    style: Dict[str, float]
+    arrangement: Dict[str, float]
+    impression: Dict[str, float]
+    shape: Dict[str, float]
+    scale: Dict[str, float]
+
+
+class ProductReferenceListResponse(BaseModel):
+    total: int
+    items: List[ProductReference]

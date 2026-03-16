@@ -43,3 +43,7 @@ npm-debug.log*
 # Cache
 .cache/
 .pytest_cache/
+
+# Retrieval artifacts
+data/fuli_products/embeddings.npy
+data/fuli_products/faiss.index

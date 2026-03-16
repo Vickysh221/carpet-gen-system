@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.core.model_config import RECOMMENDED_MODEL_CONFIG
 from app.schemas import (
@@ -7,7 +7,11 @@ from app.schemas import (
     ComposePromptResponse,
     ExplorationSessionResponse,
     FeedbackRequest,
+    ProductReferenceListResponse,
 )
+from app.services.retrieval_models import IndexBuildResponse, SearchMatchResponse, SearchResponse
+from app.services.reference_library import load_fuli_products
+from app.services.visual_search import ensure_search_index, search_similar_products
 from app.services.mock_data import build_prompt_trace, build_session
 
 
@@ -22,6 +26,43 @@ def healthcheck() -> dict[str, str]:
 @router.get("/model-config")
 def get_model_config():
     return RECOMMENDED_MODEL_CONFIG
+
+
+@router.get("/reference-library/fuli-products", response_model=ProductReferenceListResponse)
+def get_fuli_products(limit: int = Query(default=100, ge=1, le=1000)) -> ProductReferenceListResponse:
+    try:
+        items = load_fuli_products(limit=limit)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ProductReferenceListResponse(total=len(items), items=items)
+
+
+@router.post("/reference-library/fuli-products/index", response_model=IndexBuildResponse)
+def build_fuli_product_index() -> IndexBuildResponse:
+    try:
+        result = ensure_search_index()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return IndexBuildResponse(**result)
+
+
+@router.post("/reference-library/fuli-products/search", response_model=SearchResponse)
+async def search_fuli_products(
+    image: UploadFile = File(...),
+    top_k: int = Query(default=8, ge=1, le=20),
+) -> SearchResponse:
+    try:
+        image_bytes = await image.read()
+        matches = search_similar_products(image_bytes=image_bytes, top_k=top_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return SearchResponse(
+        total=len(matches),
+        items=[SearchMatchResponse(**match.__dict__) for match in matches],
+    )
 
 
 @router.post("/preference/bootstrap", response_model=ExplorationSessionResponse)

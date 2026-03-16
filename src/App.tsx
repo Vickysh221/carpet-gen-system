@@ -9,27 +9,16 @@ import { BottomControls } from "@/components/BottomControls";
 import { DebugPanel } from "@/components/DebugPanel";
 import { mockExplorationSession } from "@/data/projectBlueprint";
 import { imageLibrary } from "@/data/imageLibrary";
-import { bootstrapSession, submitFeedback } from "@/lib/api";
+import { bootstrapSession, fetchReferenceLibrary, searchReferenceLibrary, submitFeedback } from "@/lib/api";
 import { analyzeUploadedImage, matchImages } from "@/lib/slotMatcher";
-import type { CandidateDesign, ExplorationSession, ImageSlotValues } from "@/types/domain";
+import { buildRound1Candidates, correctBaseFromFeedback } from "@/lib/parameterManager";
+import type { CandidateDesign, ExplorationSession, ImageSlotValues, LibraryImage } from "@/types/domain";
 
-// Carpet pattern images (from design assets) — kept for fallback cycling
-import img1 from "@/assets/b6dd505b250571fc53f58ad0fe392a93a3e7846a.png";
-import img2 from "@/assets/13f99fecf4d10fae2e2ed4ba4174fc87fa3a3f96.png";
-import img3 from "@/assets/c9e88114ceab979959b9b9326e445337371e2024.png";
-import img4 from "@/assets/f388e72e028f6996638daecb2e4f1ddef9acc8f5.png";
-import img5 from "@/assets/4d380627eec25cb6130ce419a12e70cf321ae37e.png";
-import img6 from "@/assets/4f1130b3dd48bbf02568141e8d683b8f8a7a6fb5.png";
-import img7 from "@/assets/fd407a342467125411c172ada697b4ff5262c37b.png";
-import img8 from "@/assets/2219ff8640fb32b5fe4d36035933e968ad811d29.png";
-import img9 from "@/assets/3b0f7e643a37e50bcc084af66c1676c7548863fd.png";
-import img10 from "@/assets/06b2a022fae9627b99cd7cdcbde93041c712c19e.png";
-import img11 from "@/assets/5802c8bd2d23935230bf071ebeffba91a400c6bd.png";
-import img12 from "@/assets/a4a5725df8c842a1d1123ea35fafaec34755333e.png";
-
-const PATTERN_IMAGES = [img1, img2, img3, img4, img5, img6, img7, img8, img9, img10, img11, img12];
 const VISIT_COUNT_KEY = "carpet_app_visit_count";
 const PATTERNS_PER_LOAD = 8;
+const ROUND1_COUNT = 5; // 1 base + 4 single-axis explorations
+const MASONRY_BREAKPOINTS = { 640: 2, 900: 3, 1200: 4 };
+const COLUMN_STAGGER = [0, 18, 8, 24];
 
 interface DisplayPattern {
   candidate: CandidateDesign;
@@ -46,16 +35,62 @@ type DebugTarget = {
   prompt: string;
 };
 
+function getColumnsCount(width: number) {
+  if (width >= 1200) return 4;
+  if (width >= 900) return 3;
+  if (width >= 640) return 2;
+  return 1;
+}
+
+function createLibraryBackedPattern(candidate: CandidateDesign, libraryIndex: number): DisplayPattern {
+  const lib = imageLibrary[libraryIndex % imageLibrary.length];
+
+  return {
+    candidate: {
+      ...candidate,
+      title: lib.name,
+    },
+    image: lib.src,
+    slots: lib.slots,
+    prompt: lib.prompt,
+    name: lib.name,
+  };
+}
+
+function makeDisplayPattern(lib: LibraryImage, deltaLabel?: string): DisplayPattern {
+  return {
+    candidate: {
+      id: lib.id,
+      title: lib.name,
+      rationale: lib.prompt,
+      promptExcerpt: lib.prompt.slice(0, 80),
+      deltaSummary: deltaLabel ?? "base",
+      palette: ["#888888", "#aaaaaa", "#cccccc"],
+      pattern: "scatter",
+    },
+    image: lib.src,
+    slots: lib.slots,
+    prompt: lib.prompt,
+    name: lib.name,
+  };
+}
+
 export default function App() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const uploadedFileRef = useRef<File | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string>();
   const [session, setSession] = useState<ExplorationSession>(mockExplorationSession);
   const [allPatterns, setAllPatterns] = useState<DisplayPattern[]>([]);
+  const [referencePatterns, setReferencePatterns] = useState<DisplayPattern[]>([]);
   const [selectedIds, setSelectedIds] = useState<Record<string, "liked" | "disliked">>({});
   const [isLoading, setIsLoading] = useState(false);
-  const [imageOffset, setImageOffset] = useState(0);
+  const [imageOffset, setImageOffset] = useState(12);
   const [debugTarget, setDebugTarget] = useState<DebugTarget | null>(null);
+  const [baseSlots, setBaseSlots] = useState<ImageSlotValues | null>(null);
+  const [columnsCount, setColumnsCount] = useState(() =>
+    typeof window === "undefined" ? 4 : getColumnsCount(window.innerWidth)
+  );
 
   // Initialize patterns from library and show modal on first visits
   useEffect(() => {
@@ -65,82 +100,112 @@ export default function App() {
       localStorage.setItem(VISIT_COUNT_KEY, String(visitCount + 1));
     }
 
-    // Show all 12 library images initially
-    setAllPatterns(
-      imageLibrary.map((lib, i) => ({
-        candidate: {
+    const fallbackPatterns = imageLibrary.map((lib, i) =>
+      createLibraryBackedPattern(
+        {
           ...mockExplorationSession.candidates[i % mockExplorationSession.candidates.length],
           id: lib.id,
           title: lib.name,
         },
-        image: lib.src,
-        slots: lib.slots,
-        prompt: lib.prompt,
-        name: lib.name,
-      }))
+        i
+      )
     );
+
+    setAllPatterns(fallbackPatterns);
+    void fetchReferenceLibrary(50)
+      .then((items) => {
+        const mapped = items.map((item, i) => ({
+          candidate: {
+            ...mockExplorationSession.candidates[i % mockExplorationSession.candidates.length],
+            id: item.id,
+            title: item.title,
+            rationale: item.sourceUrl,
+            promptExcerpt: item.tags.join(", ") || "FULI product reference",
+            deltaSummary: "reference library",
+            palette: ["#5e5e5e", "#9a9a9a", "#d8d8d8"] as [string, string, string],
+            pattern: "scatter" as const,
+          },
+          image: item.imageUrl,
+          name: item.title,
+          prompt: item.tags.join(", "),
+        }));
+        setReferencePatterns(mapped);
+        setAllPatterns(mapped.slice(0, 12));
+        setImageOffset(12);
+      })
+      .catch(() => {
+        setReferencePatterns(fallbackPatterns);
+      });
+  }, []);
+
+  useEffect(() => {
+    const syncColumnsCount = () => setColumnsCount(getColumnsCount(window.innerWidth));
+
+    syncColumnsCount();
+    window.addEventListener("resize", syncColumnsCount);
+
+    return () => window.removeEventListener("resize", syncColumnsCount);
   }, []);
 
   const handleUpload = async (file: File) => {
     const url = URL.createObjectURL(file);
+    uploadedFileRef.current = file;
     setUploadedImage(url);
     setIsLoading(true);
     setSelectedIds({});
     setDebugTarget(null);
 
     try {
-      // Color analysis → slot matching
-      let matched: DisplayPattern[] | null = null;
+      const retrieved = await searchReferenceLibrary(file, 12);
+      const round1Patterns: DisplayPattern[] = retrieved.map((item, i) => ({
+        candidate: {
+          id: item.id,
+          title: item.title,
+          rationale: item.sourceUrl,
+          promptExcerpt: `score ${(item.score ?? 0).toFixed(3)} / clip ${(item.clipScore ?? 0).toFixed(3)}`,
+          deltaSummary: i === 0 ? "top match" : `top-${i + 1}`,
+          palette: ["#4a4a4a", "#8d8d8d", "#d9d9d9"],
+          pattern: "scatter",
+        },
+        image: item.imageUrl,
+        slots: item.slotValues,
+        prompt: item.tags.join(", "),
+        name: item.title,
+      }));
+      setBaseSlots(retrieved[0]?.slotValues ?? null);
+
+      bootstrapSession(file.name)
+        .then((nextSession) => {
+          startTransition(() => setSession(nextSession));
+        })
+        .catch(() => {/* silently ignore — session state is optional */});
+
+      startTransition(() => setAllPatterns(round1Patterns));
+    } catch {
       try {
         const querySlots = await analyzeUploadedImage(file);
-        const topLibImages = matchImages(querySlots, imageLibrary, PATTERNS_PER_LOAD);
-        matched = topLibImages.map((lib, i) => ({
-          candidate: {
-            ...mockExplorationSession.candidates[i % mockExplorationSession.candidates.length],
-            id: lib.id,
-            title: lib.name,
-          },
-          image: lib.src,
-          slots: lib.slots,
-          prompt: lib.prompt,
-          name: lib.name,
-        }));
+        const round1 = buildRound1Candidates(querySlots, imageLibrary);
+        setBaseSlots(round1.baseSlots);
+        const round1Patterns: DisplayPattern[] = [
+          makeDisplayPattern(round1.base, "base"),
+          ...round1.explorations.map((e) => makeDisplayPattern(e.img, e.deltaSummary)),
+        ];
+        startTransition(() => setAllPatterns(round1Patterns));
       } catch {
-        // Color analysis failed — will fall back to API / mock
-      }
-
-      const nextSession = await bootstrapSession(file.name);
-      startTransition(() => {
-        setSession(nextSession);
-        if (matched) {
-          setAllPatterns(matched);
-        } else {
-          setAllPatterns(
-            nextSession.candidates.map((c, i) => ({
-              candidate: c,
-              image: PATTERN_IMAGES[i % PATTERN_IMAGES.length],
-            }))
-          );
-        }
-      });
-    } catch {
-      // API failed — use color-matched results if available, else keep current
-      const querySlots = await analyzeUploadedImage(file).catch(() => null);
-      if (querySlots) {
-        const topLibImages = matchImages(querySlots, imageLibrary, PATTERNS_PER_LOAD);
-        setAllPatterns(
-          topLibImages.map((lib, i) => ({
-            candidate: {
-              ...mockExplorationSession.candidates[i % mockExplorationSession.candidates.length],
-              id: lib.id,
-              title: lib.name,
-            },
-            image: lib.src,
-            slots: lib.slots,
-            prompt: lib.prompt,
-            name: lib.name,
-          }))
+        const topLibImages = matchImages(
+          {
+            colorPalette: { hueBias: 0.5, saturation: 0.5, lightness: 0.5 },
+            motif: { geometryDegree: 0.5, organicDegree: 0.5, complexity: 0.5 },
+            style: { graphicness: 0.5, painterlyDegree: 0.5, heritageSense: 0.5 },
+            arrangement: { orderliness: 0.5, density: 0.5, directionality: 0.5 },
+            impression: { calmness: 0.5, energy: 0.5, softness: 0.5 },
+            shape: { angularity: 0.5, edgeSoftness: 0.5, irregularity: 0.5 },
+            scale: { motifScale: 0.5, rhythm: 0.5, contrast: 0.5 },
+          },
+          imageLibrary,
+          ROUND1_COUNT
         );
+        startTransition(() => setAllPatterns(topLibImages.map((lib) => makeDisplayPattern(lib))));
       }
     } finally {
       setIsLoading(false);
@@ -182,37 +247,84 @@ export default function App() {
       .filter(([, v]) => v === "disliked")
       .map(([k]) => k);
 
+    // Collect slot values for liked and disliked patterns
+    const likedSlots = allPatterns
+      .filter((p) => selectedIds[p.candidate.id] === "liked" && p.slots)
+      .map((p) => p.slots!);
+    const dislikedSlots = allPatterns
+      .filter((p) => selectedIds[p.candidate.id] === "disliked" && p.slots)
+      .map((p) => p.slots!);
+
+    // Correct base parameters from user feedback
+    const currentBase = baseSlots;
+    const correctedBase =
+      currentBase && (likedSlots.length + dislikedSlots.length > 0)
+        ? correctBaseFromFeedback(currentBase, likedSlots, dislikedSlots)
+        : currentBase;
+
+    if (correctedBase) setBaseSlots(correctedBase);
+
+    let newPatterns: DisplayPattern[] = [];
     const nextOffset = imageOffset + PATTERNS_PER_LOAD;
+
+    if (uploadedFileRef.current) {
+      try {
+        const retrieved = await searchReferenceLibrary(uploadedFileRef.current, nextOffset);
+        const shownIds = new Set(allPatterns.map((pattern) => pattern.candidate.id));
+        newPatterns = retrieved
+          .filter((item) => !shownIds.has(item.id))
+          .slice(0, PATTERNS_PER_LOAD)
+          .map((item, i) => ({
+            candidate: {
+              id: item.id,
+              title: item.title,
+              rationale: item.sourceUrl,
+              promptExcerpt: `score ${(item.score ?? 0).toFixed(3)} / rerank ${(item.rerankScore ?? 0).toFixed(3)}`,
+              deltaSummary: `more-${i + 1}`,
+              palette: ["#4a4a4a", "#8d8d8d", "#d9d9d9"],
+              pattern: "scatter",
+            },
+            image: item.imageUrl,
+            slots: item.slotValues,
+            prompt: item.tags.join(", "),
+            name: item.title,
+          }));
+      } catch {
+        newPatterns = [];
+      }
+    }
+
+    if (newPatterns.length === 0) {
+      if (referencePatterns.length > allPatterns.length) {
+        newPatterns = referencePatterns.slice(imageOffset, nextOffset);
+      } else {
+        const matchBase = correctedBase ?? {
+          colorPalette: { hueBias: 0.5, saturation: 0.5, lightness: 0.5 },
+          motif: { geometryDegree: 0.5, organicDegree: 0.5, complexity: 0.5 },
+          style: { graphicness: 0.5, painterlyDegree: 0.5, heritageSense: 0.5 },
+          arrangement: { orderliness: 0.5, density: 0.5, directionality: 0.5 },
+          impression: { calmness: 0.5, energy: 0.5, softness: 0.5 },
+          shape: { angularity: 0.5, edgeSoftness: 0.5, irregularity: 0.5 },
+          scale: { motifScale: 0.5, rhythm: 0.5, contrast: 0.5 },
+        };
+        const nextLibImages = matchImages(matchBase, imageLibrary, PATTERNS_PER_LOAD);
+        newPatterns = nextLibImages.map((lib) => makeDisplayPattern(lib));
+      }
+    }
+
     setImageOffset(nextOffset);
 
-    try {
-      const nextSession = await submitFeedback({
-        sessionId: session.sessionId,
-        likedIds,
-        dislikedIds,
-        continueGenerate: true,
-      });
-      startTransition(() => {
-        setSession(nextSession);
-        const newPatterns = nextSession.candidates.map((c, i) => ({
-          candidate: c,
-          image: PATTERN_IMAGES[(nextOffset + i) % PATTERN_IMAGES.length],
-        }));
-        setAllPatterns((prev) => [...prev, ...newPatterns]);
-        setSelectedIds({});
-      });
-    } catch {
-      const fallbackPatterns = Array.from({ length: PATTERNS_PER_LOAD }, (_, i) => ({
-        candidate: {
-          ...session.candidates[i % session.candidates.length],
-          id: `fallback-${Date.now()}-${i}`,
-        },
-        image: PATTERN_IMAGES[(nextOffset + i) % PATTERN_IMAGES.length],
-      }));
-      setAllPatterns((prev) => [...prev, ...fallbackPatterns]);
-    } finally {
-      setIsLoading(false);
-    }
+    // Fire API feedback in background for session continuity
+    submitFeedback({ sessionId: session.sessionId, likedIds, dislikedIds, continueGenerate: true })
+      .then((nextSession) => startTransition(() => setSession(nextSession)))
+      .catch(() => {/* non-critical */});
+
+    startTransition(() => {
+      setAllPatterns((prev) => [...prev, ...newPatterns]);
+      setSelectedIds({});
+    });
+
+    setIsLoading(false);
   };
 
   const handleSelectPattern = (info: { image: string; name: string; slots: ImageSlotValues; prompt: string } | null) => {
@@ -226,24 +338,30 @@ export default function App() {
       <Header />
 
       {/* Masonry grid */}
-      <div className="px-6 py-8">
-        <ResponsiveMasonry columnsCountBreakPoints={{ 640: 2, 900: 3, 1200: 4 }}>
-          <Masonry gutter="20px">
-            {allPatterns.map((p, i) => (
-              <PatternCard
-                key={`${p.candidate.id}-${i}`}
-                image={p.image}
-                candidate={p.candidate}
-                name={p.name}
-                slotValues={p.slots}
-                prompt={p.prompt}
-                onSelect={handleSelectPattern}
-                onLike={() => handleFeedback(p.candidate.id, "liked")}
-                onDislike={() => handleFeedback(p.candidate.id, "disliked")}
-              />
-            ))}
-          </Masonry>
-        </ResponsiveMasonry>
+      <div className="px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mx-auto w-full max-w-[1480px]">
+          <ResponsiveMasonry columnsCountBreakPoints={MASONRY_BREAKPOINTS}>
+            <Masonry gutter="20px">
+              {allPatterns.map((p, i) => (
+                <PatternCard
+                  key={`${p.candidate.id}-${i}`}
+                  image={p.image}
+                  candidate={p.candidate}
+                  name={p.name}
+                  slotValues={p.slots}
+                  prompt={p.prompt}
+                  onSelect={handleSelectPattern}
+                  onLike={() => handleFeedback(p.candidate.id, "liked")}
+                  onDislike={() => handleFeedback(p.candidate.id, "disliked")}
+                  className="mb-5"
+                  style={{
+                    marginTop: columnsCount > 1 ? `${COLUMN_STAGGER[i % columnsCount] ?? 0}px` : "0px",
+                  }}
+                />
+              ))}
+            </Masonry>
+          </ResponsiveMasonry>
+        </div>
 
         {/* Load more button */}
         <div className="flex justify-center mt-16 mb-28">

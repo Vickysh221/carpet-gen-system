@@ -1,5 +1,6 @@
 import { Heart, Plus, Minus } from "lucide-react";
 import { useState } from "react";
+import type { CSSProperties } from "react";
 import type { CandidateDesign, ImageSlotValues } from "@/types/domain";
 
 type PatternCardProps = {
@@ -8,21 +9,37 @@ type PatternCardProps = {
   name?: string;
   slotValues?: ImageSlotValues;
   prompt?: string;
+  className?: string;
+  style?: CSSProperties;
   onSelect: (info: { image: string; name: string; slots: ImageSlotValues; prompt: string } | null) => void;
   onLike: () => void;
   onDislike: () => void;
 };
 
-export function PatternCard({ image, candidate, name, slotValues, prompt, onSelect, onLike, onDislike }: PatternCardProps) {
+export function PatternCard({
+  image,
+  candidate,
+  name,
+  slotValues,
+  prompt,
+  className,
+  style,
+  onSelect,
+  onLike,
+  onDislike,
+}: PatternCardProps) {
   const [isHovered, setIsHovered] = useState(false);
 
   return (
     <div
-      className="relative cursor-pointer break-inside-avoid mb-5"
+      className={`relative w-full cursor-pointer break-inside-avoid ${className ?? ""}`}
+      style={style}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <img alt="地毯纹样" className="w-full h-auto object-cover block" src={image} />
+      <div className="relative w-full overflow-hidden">
+        <img alt="地毯纹样" className="block w-full h-auto min-w-0" src={image} />
+      </div>
 
       {isHovered && (
         <>

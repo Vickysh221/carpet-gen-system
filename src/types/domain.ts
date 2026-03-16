@@ -119,4 +119,6 @@ export interface LibraryImage {
   slots: ImageSlotValues;
   prompt: string;
   tags: string[];
+  sourceUrl?: string;
+  score?: number;
 }
