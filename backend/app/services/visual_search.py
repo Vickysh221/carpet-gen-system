@@ -86,7 +86,13 @@ def ensure_search_index() -> dict[str, int]:
     return {"indexed": len(valid_metadata), "dimension": int(embedding_matrix.shape[1])}
 
 
-def search_similar_products(image_bytes: bytes, top_k: int = 8) -> list[SearchMatch]:
+def search_similar_products(
+    image_bytes: bytes,
+    top_k: int = 8,
+    liked_ids: list[str] | None = None,
+    disliked_ids: list[str] | None = None,
+    locked_candidate_ids: list[str] | None = None,
+) -> list[SearchMatch]:
     ensure_search_artifacts()
 
     query_image = load_rgb_image(image_bytes)
@@ -96,10 +102,21 @@ def search_similar_products(image_bytes: bytes, top_k: int = 8) -> list[SearchMa
     finally:
         temp_path.unlink(missing_ok=True)
     query_engineered = compute_engineered_features(query_image)
+    embeddings = np.load(FULI_EMBEDDINGS_FILE)
     index = faiss.read_index(str(FULI_INDEX_FILE))
     feature_payload = json.loads(FULI_FEATURES_FILE.read_text(encoding="utf-8"))
+    liked_ids = liked_ids or []
+    disliked_ids = disliked_ids or []
+    locked_candidate_ids = locked_candidate_ids or []
+    liked_embedding_centroid, liked_feature_centroid = build_preference_centroids(liked_ids, feature_payload, embeddings)
+    disliked_embedding_centroid, disliked_feature_centroid = build_preference_centroids(disliked_ids, feature_payload, embeddings)
+    locked_embedding_centroid, locked_feature_centroid = build_preference_centroids(
+        locked_candidate_ids,
+        feature_payload,
+        embeddings,
+    )
 
-    distances, indices = index.search(query_embedding.reshape(1, -1).astype("float32"), min(top_k * 3, len(feature_payload)))
+    distances, indices = index.search(query_embedding.reshape(1, -1).astype("float32"), min(top_k * 5, len(feature_payload)))
 
     results: list[SearchMatch] = []
     for clip_score, raw_index in zip(distances[0], indices[0]):
@@ -107,8 +124,19 @@ def search_similar_products(image_bytes: bytes, top_k: int = 8) -> list[SearchMa
             continue
         item = feature_payload[int(raw_index)]
         candidate_engineered = np.array(item["engineered_features"], dtype=np.float32)
+        candidate_embedding = embeddings[int(raw_index)]
         rerank = rerank_score(query_engineered, candidate_engineered)
-        final_score = float(0.7 * float(clip_score) + 0.3 * rerank)
+        preference_delta = compute_preference_delta(
+            candidate_embedding=candidate_embedding,
+            candidate_features=candidate_engineered,
+            liked_embedding_centroid=liked_embedding_centroid,
+            liked_feature_centroid=liked_feature_centroid,
+            disliked_embedding_centroid=disliked_embedding_centroid,
+            disliked_feature_centroid=disliked_feature_centroid,
+            locked_embedding_centroid=locked_embedding_centroid,
+            locked_feature_centroid=locked_feature_centroid,
+        )
+        final_score = float(0.65 * float(clip_score) + 0.2 * rerank + 0.15 * preference_delta)
         summary = summarize_engineered_features(candidate_engineered)
         results.append(
             SearchMatch(
@@ -256,6 +284,69 @@ def rerank_score(query_features: np.ndarray, candidate_features: np.ndarray) -> 
     )
     weighted_distance = float((deltas * weights).sum())
     return max(0.0, 1.0 - weighted_distance)
+
+
+def build_preference_centroids(
+    target_ids: list[str],
+    feature_payload: list[dict],
+    embeddings: np.ndarray,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if not target_ids:
+        return None, None
+
+    index_by_id = {item["id"]: idx for idx, item in enumerate(feature_payload)}
+    matched_indices = [index_by_id[target_id] for target_id in target_ids if target_id in index_by_id]
+    if not matched_indices:
+        return None, None
+
+    embedding_centroid = np.mean(embeddings[matched_indices], axis=0)
+    feature_centroid = np.mean(
+        [np.array(feature_payload[idx]["engineered_features"], dtype=np.float32) for idx in matched_indices],
+        axis=0,
+    )
+    return embedding_centroid.astype(np.float32), feature_centroid.astype(np.float32)
+
+
+def compute_preference_delta(
+    candidate_embedding: np.ndarray,
+    candidate_features: np.ndarray,
+    liked_embedding_centroid: np.ndarray | None,
+    liked_feature_centroid: np.ndarray | None,
+    disliked_embedding_centroid: np.ndarray | None,
+    disliked_feature_centroid: np.ndarray | None,
+    locked_embedding_centroid: np.ndarray | None,
+    locked_feature_centroid: np.ndarray | None,
+) -> float:
+    liked_bonus = 0.0
+    disliked_penalty = 0.0
+    locked_bonus = 0.0
+
+    if liked_embedding_centroid is not None and liked_feature_centroid is not None:
+        liked_bonus = 0.75 * cosine_similarity(candidate_embedding, liked_embedding_centroid) + 0.25 * rerank_score(
+            liked_feature_centroid,
+            candidate_features,
+        )
+
+    if disliked_embedding_centroid is not None and disliked_feature_centroid is not None:
+        disliked_penalty = 0.75 * cosine_similarity(candidate_embedding, disliked_embedding_centroid) + 0.25 * rerank_score(
+            disliked_feature_centroid,
+            candidate_features,
+        )
+
+    if locked_embedding_centroid is not None and locked_feature_centroid is not None:
+        locked_bonus = 0.75 * cosine_similarity(candidate_embedding, locked_embedding_centroid) + 0.25 * rerank_score(
+            locked_feature_centroid,
+            candidate_features,
+        )
+
+    return float(np.clip((0.6 * liked_bonus) + (1.1 * locked_bonus) - disliked_penalty, -1.0, 1.0))
+
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom == 0:
+        return 0.0
+    return float(np.dot(a, b) / denom)
 
 
 def summarize_engineered_features(features: np.ndarray) -> dict[str, float]:

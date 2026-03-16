@@ -7,14 +7,27 @@ import { UploadModal } from "@/components/UploadModal";
 import { PatternCard } from "@/components/PatternCard";
 import { BottomControls } from "@/components/BottomControls";
 import { DebugPanel } from "@/components/DebugPanel";
+import { PreferenceHistoryPanel } from "@/components/PreferenceHistoryPanel";
 import { mockExplorationSession } from "@/data/projectBlueprint";
 import { imageLibrary } from "@/data/imageLibrary";
-import { bootstrapSession, fetchReferenceLibrary, searchReferenceLibrary, submitFeedback } from "@/lib/api";
+import {
+  bootstrapSession,
+  clearPreferenceProfile,
+  fetchPreferenceProfile,
+  fetchReferenceLibrary,
+  lockPreferenceAnchor,
+  searchReferenceLibrary,
+  submitFeedback,
+  type PreferenceProfile,
+  undoLatestPreferenceEvent,
+  unlockPreferenceAnchor,
+} from "@/lib/api";
 import { analyzeUploadedImage, matchImages } from "@/lib/slotMatcher";
 import { buildRound1Candidates, correctBaseFromFeedback } from "@/lib/parameterManager";
 import type { CandidateDesign, ExplorationSession, ImageSlotValues, LibraryImage } from "@/types/domain";
 
 const VISIT_COUNT_KEY = "carpet_app_visit_count";
+const CLIENT_ID_KEY = "carpet_app_client_id";
 const PATTERNS_PER_LOAD = 8;
 const ROUND1_COUNT = 5; // 1 base + 4 single-axis explorations
 const MASONRY_BREAKPOINTS = { 640: 2, 900: 3, 1200: 4 };
@@ -78,12 +91,17 @@ function makeDisplayPattern(lib: LibraryImage, deltaLabel?: string): DisplayPatt
 export default function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const uploadedFileRef = useRef<File | null>(null);
+  const clientIdRef = useRef("");
   const [showModal, setShowModal] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string>();
   const [session, setSession] = useState<ExplorationSession>(mockExplorationSession);
   const [allPatterns, setAllPatterns] = useState<DisplayPattern[]>([]);
   const [referencePatterns, setReferencePatterns] = useState<DisplayPattern[]>([]);
   const [selectedIds, setSelectedIds] = useState<Record<string, "liked" | "disliked">>({});
+  const [historyProfile, setHistoryProfile] = useState<PreferenceProfile | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [isHistoryMutating, setIsHistoryMutating] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [imageOffset, setImageOffset] = useState(12);
   const [debugTarget, setDebugTarget] = useState<DebugTarget | null>(null);
@@ -94,6 +112,15 @@ export default function App() {
 
   // Initialize patterns from library and show modal on first visits
   useEffect(() => {
+    const storedClientId = localStorage.getItem(CLIENT_ID_KEY);
+    if (storedClientId) {
+      clientIdRef.current = storedClientId;
+    } else {
+      const nextClientId = `client_${crypto.randomUUID()}`;
+      localStorage.setItem(CLIENT_ID_KEY, nextClientId);
+      clientIdRef.current = nextClientId;
+    }
+
     const visitCount = parseInt(localStorage.getItem(VISIT_COUNT_KEY) || "0");
     if (visitCount < 3) {
       setShowModal(true);
@@ -156,7 +183,10 @@ export default function App() {
     setDebugTarget(null);
 
     try {
-      const retrieved = await searchReferenceLibrary(file, 12);
+      const retrieved = await searchReferenceLibrary(file, 12, {
+        clientId: clientIdRef.current,
+        sessionId: session.sessionId,
+      });
       const round1Patterns: DisplayPattern[] = retrieved.map((item, i) => ({
         candidate: {
           id: item.id,
@@ -174,7 +204,7 @@ export default function App() {
       }));
       setBaseSlots(retrieved[0]?.slotValues ?? null);
 
-      bootstrapSession(file.name)
+      bootstrapSession(file.name, clientIdRef.current)
         .then((nextSession) => {
           startTransition(() => setSession(nextSession));
         })
@@ -269,7 +299,12 @@ export default function App() {
 
     if (uploadedFileRef.current) {
       try {
-        const retrieved = await searchReferenceLibrary(uploadedFileRef.current, nextOffset);
+        const retrieved = await searchReferenceLibrary(uploadedFileRef.current, nextOffset, {
+          clientId: clientIdRef.current,
+          sessionId: session.sessionId,
+          likedIds,
+          dislikedIds,
+        });
         const shownIds = new Set(allPatterns.map((pattern) => pattern.candidate.id));
         newPatterns = retrieved
           .filter((item) => !shownIds.has(item.id))
@@ -315,7 +350,13 @@ export default function App() {
     setImageOffset(nextOffset);
 
     // Fire API feedback in background for session continuity
-    submitFeedback({ sessionId: session.sessionId, likedIds, dislikedIds, continueGenerate: true })
+    submitFeedback({
+      sessionId: session.sessionId,
+      clientId: clientIdRef.current,
+      likedIds,
+      dislikedIds,
+      continueGenerate: true,
+    })
       .then((nextSession) => startTransition(() => setSession(nextSession)))
       .catch(() => {/* non-critical */});
 
@@ -330,6 +371,90 @@ export default function App() {
   const handleSelectPattern = (info: { image: string; name: string; slots: ImageSlotValues; prompt: string } | null) => {
     if (info) {
       setDebugTarget(info);
+    }
+  };
+
+  const handleViewHistory = async () => {
+    setIsHistoryOpen(true);
+    setIsHistoryLoading(true);
+    try {
+      const profile = await fetchPreferenceProfile({
+        clientId: clientIdRef.current,
+        sessionId: session.sessionId,
+      });
+      setHistoryProfile(profile);
+    } catch {
+      setHistoryProfile({
+        clientId: clientIdRef.current,
+        likedIds: [],
+        dislikedIds: [],
+        lockedCandidateIds: [],
+        items: [],
+      });
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
+  const refreshHistoryProfile = async () => {
+    const profile = await fetchPreferenceProfile({
+      clientId: clientIdRef.current,
+      sessionId: session.sessionId,
+    });
+    setHistoryProfile(profile);
+  };
+
+  const handleClearHistory = async () => {
+    setIsHistoryMutating(true);
+    try {
+      await clearPreferenceProfile({
+        clientId: clientIdRef.current,
+        sessionId: session.sessionId,
+      });
+      await refreshHistoryProfile();
+    } catch {
+      // Ignore and leave current UI state unchanged.
+    } finally {
+      setIsHistoryMutating(false);
+    }
+  };
+
+  const handleUndoHistory = async () => {
+    setIsHistoryMutating(true);
+    try {
+      await undoLatestPreferenceEvent({
+        clientId: clientIdRef.current,
+        sessionId: session.sessionId,
+      });
+      await refreshHistoryProfile();
+    } catch {
+      // Ignore and leave current UI state unchanged.
+    } finally {
+      setIsHistoryMutating(false);
+    }
+  };
+
+  const handleToggleAnchorLock = async (candidateId: string, locked: boolean) => {
+    setIsHistoryMutating(true);
+    try {
+      if (locked) {
+        await unlockPreferenceAnchor({
+          clientId: clientIdRef.current,
+          sessionId: session.sessionId,
+          candidateId,
+        });
+      } else {
+        await lockPreferenceAnchor({
+          clientId: clientIdRef.current,
+          sessionId: session.sessionId,
+          candidateId,
+        });
+      }
+      await refreshHistoryProfile();
+    } catch {
+      // Ignore and leave current UI state unchanged.
+    } finally {
+      setIsHistoryMutating(false);
     }
   };
 
@@ -385,7 +510,9 @@ export default function App() {
       <BottomControls
         uploadedImage={uploadedImage}
         onUpdateReference={() => setShowModal(true)}
-        onViewHistory={() => console.log("View history")}
+        onViewHistory={() => {
+          void handleViewHistory();
+        }}
       />
 
       {/* Upload modal */}
@@ -413,6 +540,26 @@ export default function App() {
 
       {/* Debug panel — fixed right sidebar */}
       <DebugPanel target={debugTarget} />
+
+      <PreferenceHistoryPanel
+        isOpen={isHistoryOpen}
+        isLoading={isHistoryLoading}
+        isMutating={isHistoryMutating}
+        clientId={historyProfile?.clientId ?? clientIdRef.current}
+        likedIds={historyProfile?.likedIds ?? []}
+        dislikedIds={historyProfile?.dislikedIds ?? []}
+        items={historyProfile?.items ?? []}
+        onClose={() => setIsHistoryOpen(false)}
+        onClear={() => {
+          void handleClearHistory();
+        }}
+        onUndo={() => {
+          void handleUndoHistory();
+        }}
+        onToggleLock={(candidateId, locked) => {
+          void handleToggleAnchorLock(candidateId, locked);
+        }}
+      />
     </div>
   );
 }

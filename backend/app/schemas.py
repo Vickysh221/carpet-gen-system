@@ -85,12 +85,14 @@ class ExplorationSessionResponse(BaseModel):
 
 class BootstrapRequest(BaseModel):
     reference_image_name: str
+    client_id: Optional[str] = None
     room_type: Optional[str] = None
     style_constraints: List[str] = Field(default_factory=list)
 
 
 class FeedbackRequest(BaseModel):
     session_id: str
+    client_id: Optional[str] = None
     liked_ids: List[str] = Field(default_factory=list)
     disliked_ids: List[str] = Field(default_factory=list)
     continue_generate: bool = True
@@ -131,3 +133,41 @@ class ImageSlotValuesResponse(BaseModel):
 class ProductReferenceListResponse(BaseModel):
     total: int
     items: List[ProductReference]
+
+
+class PreferenceProfileItem(BaseModel):
+    id: str
+    title: str
+    image_url: str
+    source_url: str
+    liked_count: int
+    disliked_count: int
+    net_score: int
+    locked: bool = False
+
+
+class PreferenceProfileResponse(BaseModel):
+    client_id: str
+    liked_ids: List[str]
+    disliked_ids: List[str]
+    locked_candidate_ids: List[str]
+    items: List[PreferenceProfileItem]
+
+
+class PreferenceProfileActionRequest(BaseModel):
+    client_id: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class PreferenceUndoResponse(BaseModel):
+    ok: bool
+    client_id: Optional[str] = None
+    undone_event_id: Optional[str] = None
+    candidate_id: Optional[str] = None
+    feedback_type: Optional[str] = None
+
+
+class PreferenceAnchorLockRequest(BaseModel):
+    client_id: Optional[str] = None
+    session_id: Optional[str] = None
+    candidate_id: str

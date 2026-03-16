@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.core.model_config import RECOMMENDED_MODEL_CONFIG
 from app.schemas import (
@@ -7,9 +7,25 @@ from app.schemas import (
     ComposePromptResponse,
     ExplorationSessionResponse,
     FeedbackRequest,
+    PreferenceAnchorLockRequest,
+    PreferenceProfileActionRequest,
+    PreferenceProfileResponse,
+    PreferenceUndoResponse,
     ProductReferenceListResponse,
 )
 from app.services.retrieval_models import IndexBuildResponse, SearchMatchResponse, SearchResponse
+from app.services.preference_store import (
+    clear_preference_profile,
+    create_session,
+    load_preference_profile,
+    load_preference_profile_items,
+    load_locked_candidate_ids,
+    remove_anchor_lock,
+    record_feedback,
+    resolve_client_id,
+    set_anchor_lock,
+    undo_latest_feedback,
+)
 from app.services.reference_library import load_fuli_products
 from app.services.visual_search import ensure_search_index, search_similar_products
 from app.services.mock_data import build_prompt_trace, build_session
@@ -51,11 +67,25 @@ def build_fuli_product_index() -> IndexBuildResponse:
 @router.post("/reference-library/fuli-products/search", response_model=SearchResponse)
 async def search_fuli_products(
     image: UploadFile = File(...),
+    client_id: str | None = Form(default=None),
+    session_id: str | None = Form(default=None),
+    liked_ids: list[str] = Form(default=[]),
+    disliked_ids: list[str] = Form(default=[]),
     top_k: int = Query(default=8, ge=1, le=20),
 ) -> SearchResponse:
     try:
         image_bytes = await image.read()
-        matches = search_similar_products(image_bytes=image_bytes, top_k=top_k)
+        stored_profile = load_preference_profile(client_id=client_id, session_id=session_id)
+        merged_liked_ids = list(dict.fromkeys([*stored_profile.liked_ids, *liked_ids]))
+        merged_disliked_ids = list(dict.fromkeys([*stored_profile.disliked_ids, *disliked_ids]))
+        locked_candidate_ids = stored_profile.locked_candidate_ids
+        matches = search_similar_products(
+            image_bytes=image_bytes,
+            top_k=top_k,
+            liked_ids=merged_liked_ids,
+            disliked_ids=merged_disliked_ids,
+            locked_candidate_ids=locked_candidate_ids,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -65,9 +95,81 @@ async def search_fuli_products(
     )
 
 
+@router.get("/preference/profile", response_model=PreferenceProfileResponse)
+def get_preference_profile(
+    client_id: str | None = Query(default=None),
+    session_id: str | None = Query(default=None),
+) -> PreferenceProfileResponse:
+    profile = load_preference_profile(client_id=client_id, session_id=session_id)
+    resolved_client_id, items = load_preference_profile_items(client_id=client_id, session_id=session_id)
+    if not resolved_client_id:
+        raise HTTPException(status_code=404, detail="Preference profile not found.")
+
+    return PreferenceProfileResponse(
+        client_id=resolved_client_id,
+        liked_ids=profile.liked_ids,
+        disliked_ids=profile.disliked_ids,
+        locked_candidate_ids=profile.locked_candidate_ids,
+        items=items,
+    )
+
+
+@router.post("/preference/profile/clear")
+def clear_profile(payload: PreferenceProfileActionRequest) -> dict[str, str | bool]:
+    resolved_client_id = clear_preference_profile(client_id=payload.client_id, session_id=payload.session_id)
+    if not resolved_client_id:
+        raise HTTPException(status_code=404, detail="Preference profile not found.")
+    return {"ok": True, "client_id": resolved_client_id}
+
+
+@router.post("/preference/profile/undo", response_model=PreferenceUndoResponse)
+def undo_profile_event(payload: PreferenceProfileActionRequest) -> PreferenceUndoResponse:
+    resolved_client_id = resolve_client_id(payload.client_id, payload.session_id)
+    if not resolved_client_id:
+        raise HTTPException(status_code=404, detail="Preference profile not found.")
+
+    event = undo_latest_feedback(client_id=payload.client_id, session_id=payload.session_id)
+    if not event:
+        return PreferenceUndoResponse(ok=False, client_id=resolved_client_id)
+
+    return PreferenceUndoResponse(
+        ok=True,
+        client_id=resolved_client_id,
+        undone_event_id=event.event_id,
+        candidate_id=event.candidate_id,
+        feedback_type=event.feedback_type,
+    )
+
+
+@router.post("/preference/profile/lock")
+def lock_profile_anchor(payload: PreferenceAnchorLockRequest) -> dict[str, str | bool]:
+    resolved_client_id = set_anchor_lock(
+        client_id=payload.client_id,
+        session_id=payload.session_id,
+        candidate_id=payload.candidate_id,
+    )
+    if not resolved_client_id:
+        raise HTTPException(status_code=404, detail="Preference profile not found.")
+    return {"ok": True, "client_id": resolved_client_id, "candidate_id": payload.candidate_id}
+
+
+@router.post("/preference/profile/unlock")
+def unlock_profile_anchor(payload: PreferenceAnchorLockRequest) -> dict[str, str | bool]:
+    resolved_client_id = remove_anchor_lock(
+        client_id=payload.client_id,
+        session_id=payload.session_id,
+        candidate_id=payload.candidate_id,
+    )
+    if not resolved_client_id:
+        raise HTTPException(status_code=404, detail="Preference profile not found.")
+    return {"ok": True, "client_id": resolved_client_id, "candidate_id": payload.candidate_id}
+
+
 @router.post("/preference/bootstrap", response_model=ExplorationSessionResponse)
 def bootstrap_session(payload: BootstrapRequest) -> ExplorationSessionResponse:
     session = build_session(round_number=1, phase="initial")
+    client_id = payload.client_id or f"client_{session.session_id}"
+    session.session_id = create_session(client_id=client_id, reference_image_name=payload.reference_image_name)
     session.strategy = (
         f"参考图 {payload.reference_image_name} 已进入 embedding 检索。"
         "本轮使用 base anchor + 4 个单槽位探索图。"
@@ -79,6 +181,15 @@ def bootstrap_session(payload: BootstrapRequest) -> ExplorationSessionResponse:
 def update_feedback(payload: FeedbackRequest) -> ExplorationSessionResponse:
     next_round = 2 if payload.continue_generate else 1
     session = build_session(round_number=next_round, phase="continue")
+    client_id = resolve_client_id(payload.client_id, payload.session_id)
+    if client_id:
+        record_feedback(
+            session_id=payload.session_id,
+            client_id=client_id,
+            liked_ids=payload.liked_ids,
+            disliked_ids=payload.disliked_ids,
+        )
+    session.session_id = payload.session_id
     if payload.liked_ids:
         session.strategy = (
             f"已记录 liked anchors: {', '.join(payload.liked_ids)}。"

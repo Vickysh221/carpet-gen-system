@@ -102,6 +102,25 @@ type ApiSearchResponse = {
   items: ApiSearchItem[];
 };
 
+type ApiPreferenceProfileItem = {
+  id: string;
+  title: string;
+  image_url: string;
+  source_url: string;
+  liked_count: number;
+  disliked_count: number;
+  net_score: number;
+  locked: boolean;
+};
+
+type ApiPreferenceProfile = {
+  client_id: string;
+  liked_ids: string[];
+  disliked_ids: string[];
+  locked_candidate_ids: string[];
+  items: ApiPreferenceProfileItem[];
+};
+
 export type RetrievedReference = {
   id: string;
   title: string;
@@ -115,6 +134,23 @@ export type RetrievedReference = {
   rerankScore?: number;
   featureSummary?: Record<string, number>;
   slotValues?: ImageSlotValues;
+};
+
+export type PreferenceProfile = {
+  clientId: string;
+  likedIds: string[];
+  dislikedIds: string[];
+  items: Array<{
+    id: string;
+    title: string;
+    imageUrl: string;
+    sourceUrl: string;
+    likedCount: number;
+    dislikedCount: number;
+    netScore: number;
+    locked: boolean;
+  }>;
+  lockedCandidateIds: string[];
 };
 
 function mapAxis(axis: ApiInternalAxis): InternalAxis {
@@ -228,11 +264,12 @@ export async function fetchModelConfig() {
   return apiRequest<ModelConfig>("/model-config");
 }
 
-export async function bootstrapSession(referenceImageName: string) {
+export async function bootstrapSession(referenceImageName: string, clientId?: string) {
   const session = await apiRequest<ApiExplorationSession>("/preference/bootstrap", {
     method: "POST",
     body: JSON.stringify({
       reference_image_name: referenceImageName,
+      client_id: clientId,
       style_constraints: [],
     }),
   });
@@ -242,6 +279,7 @@ export async function bootstrapSession(referenceImageName: string) {
 
 export async function submitFeedback(payload: {
   sessionId: string;
+  clientId?: string;
   likedIds: string[];
   dislikedIds: string[];
   continueGenerate?: boolean;
@@ -250,6 +288,7 @@ export async function submitFeedback(payload: {
     method: "POST",
     body: JSON.stringify({
       session_id: payload.sessionId,
+      client_id: payload.clientId,
       liked_ids: payload.likedIds,
       disliked_ids: payload.dislikedIds,
       continue_generate: payload.continueGenerate ?? true,
@@ -287,9 +326,21 @@ export async function buildReferenceIndex() {
   });
 }
 
-export async function searchReferenceLibrary(file: File, topK = 8) {
+export async function searchReferenceLibrary(
+  file: File,
+  topK = 8,
+  preference?: { clientId?: string; sessionId?: string; likedIds?: string[]; dislikedIds?: string[] }
+) {
   const formData = new FormData();
   formData.append("image", file);
+  if (preference?.clientId) formData.append("client_id", preference.clientId);
+  if (preference?.sessionId) formData.append("session_id", preference.sessionId);
+  for (const likedId of preference?.likedIds ?? []) {
+    formData.append("liked_ids", likedId);
+  }
+  for (const dislikedId of preference?.dislikedIds ?? []) {
+    formData.append("disliked_ids", dislikedId);
+  }
 
   const response = await fetch(`${API_BASE}/reference-library/fuli-products/search?top_k=${topK}`, {
     method: "POST",
@@ -303,4 +354,76 @@ export async function searchReferenceLibrary(file: File, topK = 8) {
 
   const payload = (await response.json()) as ApiSearchResponse;
   return payload.items.map(mapSearchItem);
+}
+
+export async function fetchPreferenceProfile(params: { clientId?: string; sessionId?: string }) {
+  const query = new URLSearchParams();
+  if (params.clientId) query.set("client_id", params.clientId);
+  if (params.sessionId) query.set("session_id", params.sessionId);
+
+  const payload = await apiRequest<ApiPreferenceProfile>(`/preference/profile?${query.toString()}`);
+  return {
+    clientId: payload.client_id,
+    likedIds: payload.liked_ids,
+    dislikedIds: payload.disliked_ids,
+    items: payload.items.map((item) => ({
+      id: item.id,
+      title: item.title,
+      imageUrl: resolveImageUrl(item.image_url),
+      sourceUrl: item.source_url,
+      likedCount: item.liked_count,
+      dislikedCount: item.disliked_count,
+      netScore: item.net_score,
+      locked: item.locked,
+    })),
+    lockedCandidateIds: payload.locked_candidate_ids,
+  } satisfies PreferenceProfile;
+}
+
+export async function clearPreferenceProfile(params: { clientId?: string; sessionId?: string }) {
+  return apiRequest<{ ok: boolean; client_id: string }>("/preference/profile/clear", {
+    method: "POST",
+    body: JSON.stringify({
+      client_id: params.clientId,
+      session_id: params.sessionId,
+    }),
+  });
+}
+
+export async function undoLatestPreferenceEvent(params: { clientId?: string; sessionId?: string }) {
+  return apiRequest<{
+    ok: boolean;
+    client_id?: string;
+    undone_event_id?: string;
+    candidate_id?: string;
+    feedback_type?: string;
+  }>("/preference/profile/undo", {
+    method: "POST",
+    body: JSON.stringify({
+      client_id: params.clientId,
+      session_id: params.sessionId,
+    }),
+  });
+}
+
+export async function lockPreferenceAnchor(params: { clientId?: string; sessionId?: string; candidateId: string }) {
+  return apiRequest<{ ok: boolean; client_id: string; candidate_id: string }>("/preference/profile/lock", {
+    method: "POST",
+    body: JSON.stringify({
+      client_id: params.clientId,
+      session_id: params.sessionId,
+      candidate_id: params.candidateId,
+    }),
+  });
+}
+
+export async function unlockPreferenceAnchor(params: { clientId?: string; sessionId?: string; candidateId: string }) {
+  return apiRequest<{ ok: boolean; client_id: string; candidate_id: string }>("/preference/profile/unlock", {
+    method: "POST",
+    body: JSON.stringify({
+      client_id: params.clientId,
+      session_id: params.sessionId,
+      candidate_id: params.candidateId,
+    }),
+  });
 }

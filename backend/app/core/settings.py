@@ -9,5 +9,6 @@ FULI_METADATA_FILE = FULI_ROOT / "metadata.json"
 FULI_EMBEDDINGS_FILE = FULI_ROOT / "embeddings.npy"
 FULI_FEATURES_FILE = FULI_ROOT / "features.json"
 FULI_INDEX_FILE = FULI_ROOT / "faiss.index"
+PREFERENCE_DB_FILE = DATA_ROOT / "preferences.sqlite3"
 
 EMBEDDING_MODEL_NAME = "openai/clip-vit-base-patch32"
