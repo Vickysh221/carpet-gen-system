@@ -87,6 +87,31 @@ function SlotSnapshot({
   );
 }
 
+function RefAssetCard({
+  asset,
+  compact = false,
+}: {
+  asset: AnnotatedAssetRecord & { distance: number };
+  compact?: boolean;
+}) {
+  return (
+    <div className={`overflow-hidden rounded-xl border border-stone-200 bg-white ${compact ? "" : "shadow-sm"}`}>
+      <div className={`overflow-hidden bg-stone-100 ${compact ? "h-24" : "h-36"}`}>
+        <img src={asset.imageUrl} alt={asset.title} className="h-full w-full object-cover" loading="lazy" />
+      </div>
+      <div className="p-3">
+        <div className="flex items-center justify-between gap-3 text-xs text-stone-700">
+          <span className="truncate font-medium text-stone-800">{asset.title}</span>
+          <span className="shrink-0 text-stone-500">dist {asset.distance.toFixed(2)}</span>
+        </div>
+        <div className="mt-1 text-[11px] text-stone-500">
+          source {asset.annotation?.annotationSource ?? (asset.tags?.includes("extended") ? "extended-registry" : "unknown")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function VariantCardView({
   variant,
   feedback,
@@ -118,17 +143,9 @@ function VariantCardView({
 
       <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50 p-3">
         <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-500">Closest refs for this variant</div>
-        <div className="space-y-2">
+        <div className="grid gap-2 md:grid-cols-2">
           {nearestRefs.map((asset) => (
-            <div key={`${variant.id}-${asset.imageId}`} className="rounded-xl border border-stone-200 bg-white px-3 py-2">
-              <div className="flex items-center justify-between gap-3 text-xs text-stone-700">
-                <span className="truncate font-medium text-stone-800">{asset.title}</span>
-                <span className="shrink-0 text-stone-500">dist {asset.distance.toFixed(2)}</span>
-              </div>
-              <div className="mt-1 text-[11px] text-stone-500">
-                source {asset.annotation?.annotationSource ?? (asset.tags?.includes("extended") ? "extended-registry" : "unknown")}
-              </div>
-            </div>
+            <RefAssetCard key={`${variant.id}-${asset.imageId}`} asset={asset} compact />
           ))}
         </div>
       </div>
@@ -169,6 +186,7 @@ export function SimulatorPage() {
   const primarySlot = getPrimarySlot(round);
   const roundExplanation = explainRound(primarySlot, roundMode);
   const referenceAssets = useMemo(() => getReferenceAssets(assetSourceMode), [assetSourceMode]);
+
   const nearestRefs = useMemo(
     () =>
       findNearestAnnotatedAssets(
@@ -182,6 +200,7 @@ export function SimulatorPage() {
       ),
     [baseState, referenceAssets]
   );
+
   const variantNearestRefsMap = useMemo(
     () =>
       Object.fromEntries(
@@ -324,25 +343,20 @@ export function SimulatorPage() {
               <div className="mb-4 rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">
                 当前 source：<span className="font-semibold text-stone-800">{assetSourceMode}</span>
               </div>
-              <div className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {nearestRefs.map((asset) => (
-                  <div key={asset.imageId} className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
-                    <div className="flex items-center justify-between text-sm font-medium text-stone-800">
-                      <span>{asset.title}</span>
-                      <span className="text-xs text-stone-500">dist {asset.distance.toFixed(2)}</span>
-                    </div>
-                    <div className="mt-1 text-xs text-stone-500">
-                      source {asset.annotation?.annotationSource ?? (asset.tags?.includes("extended") ? "extended-registry" : "unknown")} · confidence {asset.annotation?.confidence ?? "n/a"}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {(asset.roleMap?.roles ?? []).map((role: string) => (
-                        <span key={role} className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-stone-600">
-                          {role}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="mt-2 text-xs text-stone-500">
-                      strong: {(asset.roleMap?.strongSlots ?? []).join(", ") || "-"}
+                  <div key={asset.imageId} className="space-y-2">
+                    <RefAssetCard asset={asset} />
+                    <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-500">
+                      confidence {asset.annotation?.confidence ?? "n/a"}
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(asset.roleMap?.roles ?? []).map((role: string) => (
+                          <span key={role} className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-stone-600">
+                            {role}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="mt-2">strong: {(asset.roleMap?.strongSlots ?? []).join(", ") || "-"}</div>
                     </div>
                   </div>
                 ))}
