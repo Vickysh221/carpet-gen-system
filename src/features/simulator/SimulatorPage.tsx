@@ -272,7 +272,7 @@ export function SimulatorPage() {
                       <span className="text-xs text-stone-500">dist {asset.distance.toFixed(2)}</span>
                     </div>
                     <div className="mt-1 text-xs text-stone-500">
-                      source {asset.annotation?.annotationSource ?? "unknown"} · confidence {asset.annotation?.confidence ?? "n/a"}
+                      source {asset.annotation?.annotationSource ?? (asset.tags?.includes("extended") ? "extended-registry" : "unknown")} · confidence {asset.annotation?.confidence ?? "n/a"}
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {(asset.roleMap?.roles ?? []).map((role: string) => (

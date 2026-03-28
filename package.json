@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "assets:index": "python3 tools/build_product_asset_index.py",
+    "assets:fetch-51-200": "python3 tools/fetch_fuli_products_51_200.py"
   },
   "dependencies": {
     "@radix-ui/react-progress": "^1.1.7",
