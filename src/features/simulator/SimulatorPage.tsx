@@ -181,8 +181,7 @@ export function SimulatorPage() {
     return "stable";
   }, [matchMode, round]);
 
-  const likedCurrentVariants = useMemo(() => variants.filter((variant) => feedbackMap[variant.id] === "liked"), [variants, feedbackMap]);
-  const preferenceCenter = useMemo(() => averagePreferenceState([...anchors.map((anchor) => anchor.state), ...likedCurrentVariants.map((variant) => variant.state)]), [anchors, likedCurrentVariants]);
+  const preferenceCenter = useMemo(() => averagePreferenceState(anchors.map((anchor) => anchor.state)), [anchors]);
 
   const baseNearestRefs = useMemo(() => findNearestAnnotatedAssets(firstOrderFromState(baseState), referenceAssets, 3), [baseState, referenceAssets]);
   const preferenceRef = useMemo(() => {
