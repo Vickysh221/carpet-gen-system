@@ -4,7 +4,7 @@ import { RefreshCw, Play, Heart, X, Trophy } from "lucide-react";
 import { collectLikedAnchors, createRandomBaseState, generateRoundVariants, getPrimarySlot, getRoundMode, reduceRound } from "./mockEngine";
 import { explainRound } from "./ontology";
 import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSources";
-import { findNearestAnnotatedAssets } from "@/core/assets/matching";
+import { assignDiverseNearestAnnotatedAssets, findNearestAnnotatedAssets } from "@/core/assets/matching";
 import type { AnnotatedAssetRecord } from "@/core/assets/types";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
 
@@ -219,19 +219,21 @@ export function SimulatorPage() {
 
   const variantNearestRefsMap = useMemo(
     () =>
-      Object.fromEntries(
-        variants.map((variant) => [
-          variant.id,
-          findNearestAnnotatedAssets(
-            {
-              color: variant.state.color,
-              motif: variant.state.motif,
-              arrangement: variant.state.arrangement,
-            },
-            referenceAssets,
-            1
-          ),
-        ])
+      assignDiverseNearestAnnotatedAssets(
+        variants.map((variant) => ({
+          key: variant.id,
+          values: {
+            color: variant.state.color,
+            motif: variant.state.motif,
+            arrangement: variant.state.arrangement,
+          },
+        })),
+        referenceAssets,
+        {
+          diversityPenalty: 0.2,
+          nearDuplicatePenalty: 0.1,
+          duplicateThreshold: 0.14,
+        }
       ),
     [variants, referenceAssets]
   );
