@@ -155,15 +155,15 @@ export function SimulatorPage() {
   const baseNearestRefs = useMemo(() => findNearestAnnotatedAssets(firstOrderFromState(baseState), referenceAssets, 3), [baseState, referenceAssets]);
   const preferenceRef = useMemo(() => {
     if (!preferenceCenter) return undefined;
-    if (effectiveMatchMode === "explore") return findExploratoryAnnotatedAssets(preferenceCenter, referenceAssets, { limit: 1, seenIds: seenRefIds, excludeIds: blockedRefIds })[0];
-    return findNearestAnnotatedAssets(preferenceCenter, referenceAssets, 1, { excludeIds: blockedRefIds })[0];
+    if (effectiveMatchMode === "explore") return findExploratoryAnnotatedAssets(preferenceCenter, referenceAssets, { limit: 1, seenIds: seenRefIds, hardExcludeIds: blockedRefIds })[0];
+    return findNearestAnnotatedAssets(preferenceCenter, referenceAssets, 1, { hardExcludeIds: blockedRefIds })[0];
   }, [preferenceCenter, referenceAssets, effectiveMatchMode, seenRefIds, blockedRefIds]);
 
   const variantNearestRefsMap = useMemo(
     () => assignDiverseNearestAnnotatedAssets(
       variants.map((variant) => ({ key: variant.id, values: firstOrderFromState(variant.state) })),
       referenceAssets,
-      { diversityPenalty: 0.2, nearDuplicatePenalty: 0.1, duplicateThreshold: 0.14, explorationSeenIds: seenRefIds, noveltyBonus: 0.14, mode: effectiveMatchMode, excludeIds: blockedRefIds }
+      { diversityPenalty: 0.2, nearDuplicatePenalty: 0.1, duplicateThreshold: 0.14, explorationSeenIds: seenRefIds, noveltyBonus: 0.14, mode: effectiveMatchMode, hardExcludeIds: blockedRefIds }
     ),
     [variants, referenceAssets, seenRefIds, effectiveMatchMode, blockedRefIds]
   );
@@ -212,7 +212,7 @@ export function SimulatorPage() {
 
     const nextSeen = [...seenRefIds, ...chosenRefIds];
     const nextRejected = [...rejectedRefIds, ...dislikedRefIds];
-    const nextBlocked = [...new Set([...nextSeen, ...nextRejected])];
+    const nextBlocked = [...new Set(nextRejected)];
 
     setSeenRefIds(nextSeen);
     setRejectedRefIds(nextRejected);
