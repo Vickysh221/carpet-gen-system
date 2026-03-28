@@ -166,7 +166,7 @@ export function SimulatorPage() {
   const [anchors, setAnchors] = useState<AnchorCard[]>([]);
   const [finalChoice, setFinalChoice] = useState<VariantCard | null>(null);
   const [assetSourceMode, setAssetSourceMode] = useState<AssetSourceMode>("core-only");
-  const [matchMode, setMatchMode] = useState<"stable" | "explore">("stable");
+  const [matchMode, setMatchMode] = useState<"auto" | "stable" | "explore">("auto");
   const [seenRefIds, setSeenRefIds] = useState<string[]>([]);
 
   const feedbackRecords = useMemo<FeedbackRecord[]>(() => Object.entries(feedbackMap).map(([variantId, value]) => ({ variantId, value })), [feedbackMap]);
@@ -174,6 +174,12 @@ export function SimulatorPage() {
   const primarySlot = getPrimarySlot(round);
   const roundExplanation = explainRound(primarySlot, roundMode);
   const referenceAssets = useMemo(() => getReferenceAssets(assetSourceMode), [assetSourceMode]);
+  const effectiveMatchMode = useMemo<"stable" | "explore">(() => {
+    if (matchMode === "stable" || matchMode === "explore") return matchMode;
+    if (round <= 2) return "explore";
+    if (round <= 4) return "explore";
+    return "stable";
+  }, [matchMode, round]);
 
   const likedCurrentVariants = useMemo(() => variants.filter((variant) => feedbackMap[variant.id] === "liked"), [variants, feedbackMap]);
   const preferenceCenter = useMemo(() => averagePreferenceState([...anchors.map((anchor) => anchor.state), ...likedCurrentVariants.map((variant) => variant.state)]), [anchors, likedCurrentVariants]);
@@ -181,11 +187,11 @@ export function SimulatorPage() {
   const baseNearestRefs = useMemo(() => findNearestAnnotatedAssets(firstOrderFromState(baseState), referenceAssets, 3), [baseState, referenceAssets]);
   const preferenceRef = useMemo(() => {
     if (!preferenceCenter) return undefined;
-    if (matchMode === "explore") {
+    if (effectiveMatchMode === "explore") {
       return findExploratoryAnnotatedAssets(preferenceCenter, referenceAssets, { limit: 1, seenIds: seenRefIds })[0];
     }
     return findNearestAnnotatedAssets(preferenceCenter, referenceAssets, 1)[0];
-  }, [preferenceCenter, referenceAssets, matchMode, seenRefIds]);
+  }, [preferenceCenter, referenceAssets, effectiveMatchMode, seenRefIds]);
 
   const variantNearestRefsMap = useMemo(
     () =>
@@ -198,10 +204,10 @@ export function SimulatorPage() {
           duplicateThreshold: 0.14,
           explorationSeenIds: seenRefIds,
           noveltyBonus: 0.14,
-          mode: matchMode,
+          mode: effectiveMatchMode,
         }
       ),
-    [variants, referenceAssets, seenRefIds, matchMode]
+    [variants, referenceAssets, seenRefIds, effectiveMatchMode]
   );
 
   const handleReset = () => {
@@ -273,9 +279,14 @@ export function SimulatorPage() {
                   <span>主更新对象：</span><span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-800">{primarySlot}</span>
                   <span>匹配模式：</span>
                   <span className="inline-flex rounded-full border border-stone-200 bg-white p-1 text-xs">
+                    <button onClick={() => setMatchMode("auto")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "auto" ? "bg-stone-900 text-white" : "text-stone-600"}`}>auto</button>
                     <button onClick={() => setMatchMode("stable")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "stable" ? "bg-stone-900 text-white" : "text-stone-600"}`}>stable</button>
                     <button onClick={() => setMatchMode("explore")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "explore" ? "bg-stone-900 text-white" : "text-stone-600"}`}>explore</button>
                   </span>
+                </div>
+                <div className="mt-3 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs text-stone-600">
+                  当前生效模式：<span className="font-semibold text-stone-800">{effectiveMatchMode}</span>
+                  {matchMode === "auto" && <span> · auto 在前两轮默认更 explorative，后续逐步转稳</span>}
                 </div>
                 <p className="mt-3 text-sm leading-6 text-stone-600">{roundExplanation.description}</p>
                 {roundExplanation.effects.length > 0 && <div className="mt-3 space-y-2"><div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Influence targets</div>{roundExplanation.effects.map((effect: string) => <div key={effect} className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs text-stone-600">{effect}</div>)}</div>}
