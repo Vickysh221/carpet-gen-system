@@ -19,12 +19,12 @@ export interface Round1Result {
 }
 
 // ---------------------------------------------------------------------------
-// Round 1 exploration specs
-// One per open slot: each shifts a single representative axis by a small delta.
-// Delta sign alternates to cover both directions of preference.
+// Round 1 exploration specs (static fallback)
+// Used only when the dynamic explorationAxisSelector cannot run.
+// Prefer passing dynamicSpecs from explorationAxisSelector.selectExplorationAxes().
 // ---------------------------------------------------------------------------
 
-const EXPLORATION_SPECS: Array<{
+const FALLBACK_EXPLORATION_SPECS: Array<{
   slotKey: keyof ImageSlotValues;
   axisKey: string;
   delta: number;
@@ -52,14 +52,17 @@ const DISLIKE_LR = 0.15;
 // ---------------------------------------------------------------------------
 export function buildRound1Candidates(
   querySlots: ImageSlotValues,
-  library: LibraryImage[]
+  library: LibraryImage[],
+  /** Optional dynamic exploration specs from explorationAxisSelector (preferred over static fallback) */
+  dynamicSpecs?: Array<{ slotKey: keyof ImageSlotValues; axisKey: string; delta: number }>
 ): Round1Result {
   const ranked = rankByDistance(querySlots, library);
   const base = ranked[0];
   const usedIds = new Set<string>([base.id]);
 
+  const specs = dynamicSpecs && dynamicSpecs.length > 0 ? dynamicSpecs : FALLBACK_EXPLORATION_SPECS;
   const explorations: ExplorationEntry[] = [];
-  for (const spec of EXPLORATION_SPECS) {
+  for (const spec of specs) {
     const shiftedSlots = applyAxisDelta(base.slots, spec.slotKey, spec.axisKey, spec.delta);
     const candidate = findClosestExcluding(shiftedSlots, library, usedIds);
     if (candidate) {

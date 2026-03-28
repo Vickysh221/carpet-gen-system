@@ -1,3 +1,13 @@
+/** Explicit phase state machine — drives different system behavior per phase */
+export type ExplorationPhase =
+  | "reference_calibration"
+  | "preference_exploration"
+  | "conflict_resolution"
+  | "preference_stabilization"
+  | "generation_ready"
+  | "generation_refinement"
+  | "recovery";
+
 export type SlotKey =
   | "colorPalette"
   | "motif"
