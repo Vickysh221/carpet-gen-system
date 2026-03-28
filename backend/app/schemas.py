@@ -171,3 +171,13 @@ class PreferenceAnchorLockRequest(BaseModel):
     client_id: Optional[str] = None
     session_id: Optional[str] = None
     candidate_id: str
+
+
+class ComposeFromReferenceResponse(BaseModel):
+    reference_id: str
+    title: str
+    image_url: str
+    slot_values: ImageSlotValuesResponse
+    prompt: str
+    negative_prompt: str
+    trace: PromptTrace

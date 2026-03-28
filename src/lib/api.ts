@@ -417,6 +417,28 @@ export async function lockPreferenceAnchor(params: { clientId?: string; sessionI
   });
 }
 
+export async function composeFromReference(referenceId: string) {
+  const response = await apiRequest<{
+    reference_id: string;
+    title: string;
+    image_url: string;
+    slot_values: ImageSlotValues;
+    prompt: string;
+    negative_prompt: string;
+    trace: ApiPromptTrace;
+  }>(`/prompt/compose-from-reference/${encodeURIComponent(referenceId)}`);
+
+  return {
+    referenceId: response.reference_id,
+    title: response.title,
+    imageUrl: resolveImageUrl(response.image_url),
+    slotValues: response.slot_values,
+    prompt: response.prompt,
+    negativePrompt: response.negative_prompt,
+    trace: mapPromptTrace(response.trace),
+  };
+}
+
 export async function unlockPreferenceAnchor(params: { clientId?: string; sessionId?: string; candidateId: string }) {
   return apiRequest<{ ok: boolean; client_id: string; candidate_id: string }>("/preference/profile/unlock", {
     method: "POST",

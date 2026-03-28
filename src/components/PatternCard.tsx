@@ -11,7 +11,7 @@ type PatternCardProps = {
   prompt?: string;
   className?: string;
   style?: CSSProperties;
-  onSelect: (info: { image: string; name: string; slots: ImageSlotValues; prompt: string } | null) => void;
+  onSelect: (info: { candidateId: string; image: string; name: string; slots: ImageSlotValues; prompt: string } | null) => void;
   onLike: () => void;
   onDislike: () => void;
 };
@@ -72,7 +72,7 @@ export function PatternCard({
               e.stopPropagation();
               onSelect(
                 slotValues
-                  ? { image, name: name ?? candidate.title, slots: slotValues, prompt: prompt ?? "" }
+                  ? { candidateId: candidate.id, image, name: name ?? candidate.title, slots: slotValues, prompt: prompt ?? "" }
                   : null
               );
             }}

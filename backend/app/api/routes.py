@@ -3,6 +3,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from app.core.model_config import RECOMMENDED_MODEL_CONFIG
 from app.schemas import (
     BootstrapRequest,
+    ComposeFromReferenceResponse,
     ComposePromptRequest,
     ComposePromptResponse,
     ExplorationSessionResponse,
@@ -12,6 +13,7 @@ from app.schemas import (
     PreferenceProfileResponse,
     PreferenceUndoResponse,
     ProductReferenceListResponse,
+    PromptTrace,
 )
 from app.services.retrieval_models import IndexBuildResponse, SearchMatchResponse, SearchResponse
 from app.services.preference_store import (
@@ -29,6 +31,7 @@ from app.services.preference_store import (
 from app.services.reference_library import load_fuli_products
 from app.services.visual_search import ensure_search_index, search_similar_products
 from app.services.mock_data import build_prompt_trace, build_session
+from app.services.prompt_composer import compose_from_liked_ids, compose_from_reference_id
 
 
 router = APIRouter(prefix="/api/v1")
@@ -202,16 +205,33 @@ def update_feedback(payload: FeedbackRequest) -> ExplorationSessionResponse:
 
 @router.post("/prompt/compose", response_model=ComposePromptResponse)
 def compose_prompt(payload: ComposePromptRequest) -> ComposePromptResponse:
-    prompt = (
-        "A cozy and serene abstract textile pattern featuring organic, flowing forms, "
-        "arranged in a balanced scattered composition with medium-scale motifs, using "
-        "a warm, muted color palette, in a hand-crafted minimalist style with rounded, soft-edged shapes."
-    )
-    if payload.slot_overrides:
-        prompt += " Slot overrides detected and ready for constrained regeneration."
+    profile = load_preference_profile(client_id=None, session_id=payload.session_id)
+    liked_ids = list(profile.liked_ids)
+
+    prompt, negative_prompt, trace_dict = compose_from_liked_ids(liked_ids)
     return ComposePromptResponse(
         session_id=payload.session_id,
         prompt=prompt,
-        negative_prompt="photorealistic, figurative objects, text, logo, extreme contrast, perspective scene",
-        trace=build_prompt_trace(),
+        negative_prompt=negative_prompt,
+        trace=PromptTrace(**trace_dict),
+    )
+
+
+@router.get("/prompt/compose-from-reference/{reference_id}", response_model=ComposeFromReferenceResponse)
+def compose_prompt_from_reference(reference_id: str) -> ComposeFromReferenceResponse:
+    result = compose_from_reference_id(reference_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Reference '{reference_id}' not found or missing engineered features. "
+                   "Run POST /reference-library/fuli-products/index first.",
+        )
+    return ComposeFromReferenceResponse(
+        reference_id=result["reference_id"],
+        title=result["title"],
+        image_url=f"/data/fuli_products/images/{result['filename']}",
+        slot_values=result["slot_values"],
+        prompt=result["prompt"],
+        negative_prompt=result["negative_prompt"],
+        trace=PromptTrace(**result["trace"]),
     )

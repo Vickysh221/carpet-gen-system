@@ -13,6 +13,7 @@ import { imageLibrary } from "@/data/imageLibrary";
 import {
   bootstrapSession,
   clearPreferenceProfile,
+  composeFromReference,
   fetchPreferenceProfile,
   fetchReferenceLibrary,
   lockPreferenceAnchor,
@@ -368,10 +369,23 @@ export default function App() {
     setIsLoading(false);
   };
 
-  const handleSelectPattern = (info: { image: string; name: string; slots: ImageSlotValues; prompt: string } | null) => {
-    if (info) {
-      setDebugTarget(info);
-    }
+  const handleSelectPattern = (info: { candidateId: string; image: string; name: string; slots: ImageSlotValues; prompt: string } | null) => {
+    if (!info) return;
+
+    // Show immediately with whatever data we have
+    setDebugTarget({ image: info.image, name: info.name, slots: info.slots, prompt: info.prompt });
+
+    // Then fetch real slot-anchored prompt from backend
+    composeFromReference(info.candidateId)
+      .then((composed) => {
+        setDebugTarget({
+          image: info.image,
+          name: info.name,
+          slots: composed.slotValues,
+          prompt: composed.prompt,
+        });
+      })
+      .catch(() => {/* keep current target unchanged */});
   };
 
   const handleViewHistory = async () => {
