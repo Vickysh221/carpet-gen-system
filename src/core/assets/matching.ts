@@ -1,15 +1,15 @@
 import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "./types";
 
 const FIRST_ORDER_WEIGHTS = [
-  0.55, // color.warmth
-  0.45, // color.saturation
-  0.4, // color.lightness
-  1.35, // motif.geometry
-  1.35, // motif.organic
-  0.85, // motif.complexity
-  1.25, // arrangement.order
-  0.6, // arrangement.spacing
-  1.15, // arrangement.direction
+  0.55,
+  0.45,
+  0.4,
+  1.35,
+  1.35,
+  0.85,
+  1.25,
+  0.6,
+  1.15,
 ];
 
 function flattenFirstOrder(values: FirstOrderSlotValues): number[] {
@@ -36,26 +36,23 @@ function weightedDistance(a: number[], b: number[]): number {
 }
 
 function scoreAsset(target: FirstOrderSlotValues, asset: AnnotatedAssetRecord): number {
-  if (!asset.annotation) {
-    return Number.POSITIVE_INFINITY;
-  }
+  if (!asset.annotation) return Number.POSITIVE_INFINITY;
+  return weightedDistance(flattenFirstOrder(target), flattenFirstOrder(asset.annotation.firstOrder));
+}
 
-  const targetVec = flattenFirstOrder(target);
-  const assetVec = flattenFirstOrder(asset.annotation.firstOrder);
-  return weightedDistance(targetVec, assetVec);
+function filterCandidates(assets: AnnotatedAssetRecord[], excludeIds?: string[]) {
+  const excluded = new Set(excludeIds ?? []);
+  return assets.filter((asset) => asset.annotation && !excluded.has(asset.imageId));
 }
 
 export function findNearestAnnotatedAssets(
   target: FirstOrderSlotValues,
   assets: AnnotatedAssetRecord[],
-  limit = 3
+  limit = 3,
+  options?: { excludeIds?: string[] }
 ): Array<AnnotatedAssetRecord & { distance: number }> {
-  return assets
-    .filter((asset) => asset.annotation)
-    .map((asset) => ({
-      ...asset,
-      distance: scoreAsset(target, asset),
-    }))
+  return filterCandidates(assets, options?.excludeIds)
+    .map((asset) => ({ ...asset, distance: scoreAsset(target, asset) }))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, limit);
 }
@@ -68,6 +65,7 @@ export function findExploratoryAnnotatedAssets(
     poolSize?: number;
     seenIds?: string[];
     noveltyBonus?: number;
+    excludeIds?: string[];
   }
 ): Array<AnnotatedAssetRecord & { distance: number }> {
   const limit = options?.limit ?? 1;
@@ -75,16 +73,18 @@ export function findExploratoryAnnotatedAssets(
   const seenIds = options?.seenIds ?? [];
   const noveltyBonus = options?.noveltyBonus ?? 0.12;
 
-  const ranked = findNearestAnnotatedAssets(target, assets, poolSize).map((asset, index) => {
+  const ranked = findNearestAnnotatedAssets(target, assets, poolSize, { excludeIds: options?.excludeIds }).map((asset, index) => {
     const seenCount = seenIds.filter((id) => id === asset.imageId).length;
-    const noveltyAdjustment = seenCount * noveltyBonus + index * 0.015;
     return {
       ...asset,
-      exploratoryScore: asset.distance + noveltyAdjustment,
+      exploratoryScore: asset.distance + seenCount * noveltyBonus + index * 0.015,
     };
   });
 
-  return ranked.sort((a, b) => a.exploratoryScore - b.exploratoryScore).slice(0, limit).map(({ exploratoryScore: _score, ...asset }) => asset);
+  return ranked
+    .sort((a, b) => a.exploratoryScore - b.exploratoryScore)
+    .slice(0, limit)
+    .map(({ exploratoryScore: _score, ...asset }) => asset);
 }
 
 export function assignDiverseNearestAnnotatedAssets(
@@ -97,6 +97,7 @@ export function assignDiverseNearestAnnotatedAssets(
     explorationSeenIds?: string[];
     noveltyBonus?: number;
     mode?: "stable" | "explore";
+    excludeIds?: string[];
   }
 ): Record<string, Array<AnnotatedAssetRecord & { distance: number }>> {
   const diversityPenalty = options?.diversityPenalty ?? 0.18;
@@ -106,43 +107,31 @@ export function assignDiverseNearestAnnotatedAssets(
   const noveltyBonus = options?.noveltyBonus ?? 0.12;
   const mode = options?.mode ?? "stable";
 
-  const candidates = assets.filter((asset) => asset.annotation);
+  const candidates = filterCandidates(assets, options?.excludeIds);
   const selectedIds: string[] = [];
   const result: Record<string, Array<AnnotatedAssetRecord & { distance: number }>> = {};
 
   for (const target of targets) {
     const ranked = candidates
+      .filter((asset) => !selectedIds.includes(asset.imageId))
       .map((asset, index) => {
         const baseDistance = scoreAsset(target.values, asset);
-        const repeatCount = selectedIds.filter((id) => id === asset.imageId).length;
         const explorationRepeatCount = explorationSeenIds.filter((id) => id === asset.imageId).length;
-        const diversityCost = repeatCount * diversityPenalty;
         const similarityCost = selectedIds.some((id) => {
           const selected = candidates.find((item) => item.imageId === id);
           if (!selected?.annotation || !asset.annotation) return false;
-          const selectedVec = flattenFirstOrder(selected.annotation.firstOrder);
-          const assetVec = flattenFirstOrder(asset.annotation.firstOrder);
-          return weightedDistance(selectedVec, assetVec) < duplicateThreshold;
-        })
-          ? nearDuplicatePenalty
-          : 0;
+          return weightedDistance(flattenFirstOrder(selected.annotation.firstOrder), flattenFirstOrder(asset.annotation.firstOrder)) < duplicateThreshold;
+        }) ? nearDuplicatePenalty : 0;
         const noveltyCost = mode === "explore" ? explorationRepeatCount * noveltyBonus + index * 0.01 : 0;
+        const diversityCost = selectedIds.length > 0 ? diversityPenalty : 0;
 
-        return {
-          ...asset,
-          distance: baseDistance,
-          score: baseDistance + diversityCost + similarityCost + noveltyCost,
-        };
+        return { ...asset, distance: baseDistance, score: baseDistance + diversityCost + similarityCost + noveltyCost };
       })
       .sort((a, b) => a.score - b.score);
 
     const chosen = ranked[0];
-    if (chosen) {
-      selectedIds.push(chosen.imageId);
-      result[target.key] = [{ ...chosen, distance: chosen.distance }];
-    } else {
-      result[target.key] = [];
-    }
+    result[target.key] = chosen ? [{ ...chosen, distance: chosen.distance }] : [];
+    if (chosen) selectedIds.push(chosen.imageId);
   }
 
   return result;
