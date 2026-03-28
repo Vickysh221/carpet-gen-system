@@ -48,6 +48,33 @@ function MiniPreview({ state }: { state: SimulatorState }) {
   );
 }
 
+function MatchedFuliPreview({
+  state,
+  matchedAsset,
+}: {
+  state: SimulatorState;
+  matchedAsset?: AnnotatedAssetRecord & { distance: number };
+}) {
+  if (!matchedAsset) {
+    return <MiniPreview state={state} />;
+  }
+
+  return (
+    <div className="relative h-40 overflow-hidden rounded-2xl border border-stone-300 bg-stone-100">
+      <img src={matchedAsset.imageUrl} alt={matchedAsset.title} className="h-full w-full object-cover" loading="lazy" />
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 via-black/20 to-transparent p-3">
+        <div className="inline-flex rounded-full bg-white/85 px-3 py-1 text-xs font-medium text-stone-800 backdrop-blur-sm">
+          matched FULI ref · dist {matchedAsset.distance.toFixed(2)}
+        </div>
+        <div className="mt-2 text-sm font-semibold text-white">{matchedAsset.title}</div>
+        <div className="mt-1 text-xs text-white/85">
+          source {matchedAsset.annotation?.annotationSource ?? (matchedAsset.tags?.includes("extended") ? "extended-registry" : "unknown")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SlotSnapshot({
   title,
   values,
@@ -89,14 +116,12 @@ function SlotSnapshot({
 
 function RefAssetCard({
   asset,
-  compact = false,
 }: {
   asset: AnnotatedAssetRecord & { distance: number };
-  compact?: boolean;
 }) {
   return (
-    <div className={`overflow-hidden rounded-xl border border-stone-200 bg-white ${compact ? "" : "shadow-sm"}`}>
-      <div className={`overflow-hidden bg-stone-100 ${compact ? "h-24" : "h-36"}`}>
+    <div className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
+      <div className="h-36 overflow-hidden bg-stone-100">
         <img src={asset.imageUrl} alt={asset.title} className="h-full w-full object-cover" loading="lazy" />
       </div>
       <div className="p-3">
@@ -115,19 +140,19 @@ function RefAssetCard({
 function VariantCardView({
   variant,
   feedback,
-  nearestRefs,
+  matchedAsset,
   onFeedback,
   onFinalize,
 }: {
   variant: VariantCard;
   feedback?: "liked" | "disliked";
-  nearestRefs: Array<AnnotatedAssetRecord & { distance: number }>;
+  matchedAsset?: AnnotatedAssetRecord & { distance: number };
   onFeedback: (variantId: string, value: "liked" | "disliked") => void;
   onFinalize: (variant: VariantCard) => void;
 }) {
   return (
     <div className="rounded-[28px] border border-stone-200 bg-white p-4 shadow-sm">
-      <MiniPreview state={variant.state} />
+      <MatchedFuliPreview state={variant.state} matchedAsset={matchedAsset} />
       <div className="mt-4 flex items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold text-stone-900">{variant.label}</div>
@@ -139,15 +164,6 @@ function VariantCardView({
         >
           <Trophy className="h-3.5 w-3.5" /> Final
         </button>
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50 p-3">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-500">Closest refs for this variant</div>
-        <div className="grid gap-2 md:grid-cols-2">
-          {nearestRefs.map((asset) => (
-            <RefAssetCard key={`${variant.id}-${asset.imageId}`} asset={asset} compact />
-          ))}
-        </div>
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -213,7 +229,7 @@ export function SimulatorPage() {
               arrangement: variant.state.arrangement,
             },
             referenceAssets,
-            2
+            1
           ),
         ])
       ),
@@ -288,7 +304,7 @@ export function SimulatorPage() {
                 </div>
                 {finalChoice && <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">已选最终方案</div>}
               </div>
-              <MiniPreview state={baseState} />
+              <MatchedFuliPreview state={baseState} matchedAsset={nearestRefs[0]} />
               <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50 p-4">
                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Round logic</div>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-stone-800">
@@ -406,7 +422,7 @@ export function SimulatorPage() {
                   key={variant.id}
                   variant={variant}
                   feedback={feedbackMap[variant.id]}
-                  nearestRefs={variantNearestRefsMap[variant.id] ?? []}
+                  matchedAsset={variantNearestRefsMap[variant.id]?.[0]}
                   onFeedback={handleFeedback}
                   onFinalize={(nextFinal) => setFinalChoice(nextFinal)}
                 />
