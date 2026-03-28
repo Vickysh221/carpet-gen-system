@@ -163,6 +163,41 @@ MVP 阶段先不继续加 slot，优先保证：
 
 ---
 
+## Current mechanism freeze point
+
+截至目前，机制已经收束到一个相对稳定的中间版本：
+
+### Stable bones
+1. design state 是中心对象，而不是 prompt
+2. 一阶 / 二阶参数分层已经站住
+3. round-based simulator 闭环已经跑通
+4. Base ref / Preference ref / Variant matched ref 三对象已区分
+5. Preference ref 只在点击“继续生成下一轮”后更新
+6. core / extended 资产层已经分开
+7. matching 已具备 weighted distance + staged exploration + constrained reference pool
+8. seen refs = soft avoid，disliked refs = hard exclude
+9. liked cards 会在下一轮后保留在右侧历史区
+
+### Current version characterization
+可以把当前版本理解为：
+
+**Simulator Mechanism v0.3 — staged exploration + submitted-preference + constrained reference pool**
+
+它已经不再是参数玩具，而是一个：
+- 以 design state 为中心
+- 用真实 FULI 资产参与 reference matching
+- 区分当前状态与已提交偏好
+- 具备早期探索 / 后期收敛意识
+的机制原型。
+
+### What is still not fully settled
+当前最未收束的一点仍然是：
+
+#### Round-level exploration set retrieval
+尤其前两轮，还没有真正升级到“先构造一组分散探索参考，再分配给这一轮”的阶段。
+
+也就是说，系统虽然已经有 explore/stable/auto、weighted distance、diversity 和 novelty，但 retrieval 仍偏 per-variant，离 genuinely spread-out exploration set 还差最后一刀。
+
 ## Next strategic direction
 
 下一阶段最重要的方向不是继续小修 UI，而是：

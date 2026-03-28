@@ -207,6 +207,39 @@ simulator 中支持：
 
 ---
 
+## Current mechanism freeze point
+
+截至目前，机制可以收束为一个相对稳定的中间版本：
+
+### Mechanism v0.3
+关键词：
+- staged exploration
+- submitted preference
+- real asset matching
+- constrained reference pool
+- soft-avoid / hard-exclude logic
+
+### What is now relatively stable
+1. 设计状态分层（first-order / second-order）
+2. round-based simulator 闭环
+3. Base ref / Preference ref / Variant matched ref 区分
+4. Preference ref 延迟到“继续生成下一轮”后才更新
+5. weighted distance
+6. stable / explore / auto matching modes
+7. seen refs soft avoid / disliked refs hard exclude
+8. liked cards 历史保留到右侧下方
+9. 素材池推进逻辑开始成立
+
+### What is still the key unsolved point
+当前最未收束的一点仍然是：
+- early-round retrieval 仍偏 per-variant
+- exploration 还不够 genuinely spread-out
+
+下一阶段真正值得做的是：
+- round-level exploration set retrieval
+
+---
+
 ## Important development heuristics learned
 
 1. `SimulatorPage.tsx` 多次出现尾部残片问题，编辑时要格外小心
