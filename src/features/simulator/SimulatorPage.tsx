@@ -3,8 +3,9 @@ import { RefreshCw, Play, Heart, X, Trophy } from "lucide-react";
 
 import { collectLikedAnchors, createRandomBaseState, generateRoundVariants, getPrimarySlot, getRoundMode, reduceRound } from "./mockEngine";
 import { explainRound } from "./ontology";
-import { mockAnnotatedAssets } from "@/core/assets/mockAnnotatedAssets";
+import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSources";
 import { findNearestAnnotatedAssets } from "@/core/assets/matching";
+import type { AnnotatedAssetRecord } from "@/core/assets/types";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
 
 function formatPercent(value: number) {
@@ -89,11 +90,13 @@ function SlotSnapshot({
 function VariantCardView({
   variant,
   feedback,
+  nearestRefs,
   onFeedback,
   onFinalize,
 }: {
   variant: VariantCard;
   feedback?: "liked" | "disliked";
+  nearestRefs: Array<AnnotatedAssetRecord & { distance: number }>;
   onFeedback: (variantId: string, value: "liked" | "disliked") => void;
   onFinalize: (variant: VariantCard) => void;
 }) {
@@ -112,6 +115,24 @@ function VariantCardView({
           <Trophy className="h-3.5 w-3.5" /> Final
         </button>
       </div>
+
+      <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50 p-3">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-500">Closest refs for this variant</div>
+        <div className="space-y-2">
+          {nearestRefs.map((asset) => (
+            <div key={`${variant.id}-${asset.imageId}`} className="rounded-xl border border-stone-200 bg-white px-3 py-2">
+              <div className="flex items-center justify-between gap-3 text-xs text-stone-700">
+                <span className="truncate font-medium text-stone-800">{asset.title}</span>
+                <span className="shrink-0 text-stone-500">dist {asset.distance.toFixed(2)}</span>
+              </div>
+              <div className="mt-1 text-[11px] text-stone-500">
+                source {asset.annotation?.annotationSource ?? (asset.tags?.includes("extended") ? "extended-registry" : "unknown")}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="mt-4 grid grid-cols-2 gap-3">
         <button
           onClick={() => onFeedback(variant.id, "liked")}
@@ -141,11 +162,13 @@ export function SimulatorPage() {
   const [feedbackMap, setFeedbackMap] = useState<Record<string, "liked" | "disliked">>({});
   const [anchors, setAnchors] = useState<AnchorCard[]>([]);
   const [finalChoice, setFinalChoice] = useState<VariantCard | null>(null);
+  const [assetSourceMode, setAssetSourceMode] = useState<AssetSourceMode>("core-only");
 
   const feedbackRecords = useMemo<FeedbackRecord[]>(() => Object.entries(feedbackMap).map(([variantId, value]) => ({ variantId, value })), [feedbackMap]);
   const roundMode = getRoundMode(round);
   const primarySlot = getPrimarySlot(round);
   const roundExplanation = explainRound(primarySlot, roundMode);
+  const referenceAssets = useMemo(() => getReferenceAssets(assetSourceMode), [assetSourceMode]);
   const nearestRefs = useMemo(
     () =>
       findNearestAnnotatedAssets(
@@ -154,10 +177,28 @@ export function SimulatorPage() {
           motif: baseState.motif,
           arrangement: baseState.arrangement,
         },
-        mockAnnotatedAssets,
+        referenceAssets,
         3
       ),
-    [baseState]
+    [baseState, referenceAssets]
+  );
+  const variantNearestRefsMap = useMemo(
+    () =>
+      Object.fromEntries(
+        variants.map((variant) => [
+          variant.id,
+          findNearestAnnotatedAssets(
+            {
+              color: variant.state.color,
+              motif: variant.state.motif,
+              arrangement: variant.state.arrangement,
+            },
+            referenceAssets,
+            2
+          ),
+        ])
+      ),
+    [variants, referenceAssets]
   );
 
   const handleReset = () => {
@@ -263,7 +304,26 @@ export function SimulatorPage() {
             </div>
 
             <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Closest FULI refs</div>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Closest FULI refs</div>
+                <div className="inline-flex rounded-full border border-stone-200 bg-stone-50 p-1 text-xs">
+                  <button
+                    onClick={() => setAssetSourceMode("core-only")}
+                    className={`rounded-full px-3 py-1 font-medium ${assetSourceMode === "core-only" ? "bg-stone-900 text-white" : "text-stone-600"}`}
+                  >
+                    core only
+                  </button>
+                  <button
+                    onClick={() => setAssetSourceMode("core+extended")}
+                    className={`rounded-full px-3 py-1 font-medium ${assetSourceMode === "core+extended" ? "bg-stone-900 text-white" : "text-stone-600"}`}
+                  >
+                    core + extended
+                  </button>
+                </div>
+              </div>
+              <div className="mb-4 rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">
+                当前 source：<span className="font-semibold text-stone-800">{assetSourceMode}</span>
+              </div>
               <div className="space-y-3">
                 {nearestRefs.map((asset) => (
                   <div key={asset.imageId} className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
@@ -332,6 +392,7 @@ export function SimulatorPage() {
                   key={variant.id}
                   variant={variant}
                   feedback={feedbackMap[variant.id]}
+                  nearestRefs={variantNearestRefsMap[variant.id] ?? []}
                   onFeedback={handleFeedback}
                   onFinalize={(nextFinal) => setFinalChoice(nextFinal)}
                 />
