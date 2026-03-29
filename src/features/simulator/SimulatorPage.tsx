@@ -4,9 +4,11 @@ import { RefreshCw, Play, Heart, X, Trophy } from "lucide-react";
 import { collectLikedAnchors, createRandomBaseState, generateRoundVariants, getPrimarySlot, getRoundMode, reduceRound } from "./mockEngine";
 import { explainRound } from "./ontology";
 import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSources";
-import { assignDiverseNearestAnnotatedAssets, findNearestAnnotatedAssets, findExploratoryAnnotatedAssets } from "@/core/assets/matching";
+import { assignDiverseNearestAnnotatedAssets, assignProbingCarriers, findNearestAnnotatedAssets, findExploratoryAnnotatedAssets } from "@/core/assets/matching";
 import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "@/core/assets/types";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
+
+const PROBING_ROUND_LIMIT = 3;
 
 interface LikedHistoryCard {
   id: string;
@@ -159,14 +161,30 @@ export function SimulatorPage() {
     return findNearestAnnotatedAssets(preferenceCenter, referenceAssets, 1, { hardExcludeIds: blockedRefIds })[0];
   }, [preferenceCenter, referenceAssets, effectiveMatchMode, seenRefIds, blockedRefIds]);
 
-  const variantNearestRefsMap = useMemo(
-    () => assignDiverseNearestAnnotatedAssets(
+  const variantNearestRefsMap = useMemo(() => {
+    if (round <= PROBING_ROUND_LIMIT) {
+      // Probing rounds: use hypothesis-aware carrier assignment so each card
+      // genuinely represents a different exploration direction rather than
+      // clustering around the same nearest asset.
+      return assignProbingCarriers(
+        variants.map((variant) => ({
+          key: variant.id,
+          variantValues: firstOrderFromState(variant.state),
+          changedSlots: variant.changedSlots.filter(
+            (s): s is "color" | "motif" | "arrangement" =>
+              s === "color" || s === "motif" || s === "arrangement"
+          ),
+        })),
+        referenceAssets,
+        { hardExcludeIds: blockedRefIds, seenIds: seenRefIds }
+      );
+    }
+    return assignDiverseNearestAnnotatedAssets(
       variants.map((variant) => ({ key: variant.id, values: firstOrderFromState(variant.state) })),
       referenceAssets,
       { diversityPenalty: 0.2, nearDuplicatePenalty: 0.1, duplicateThreshold: 0.14, explorationSeenIds: seenRefIds, noveltyBonus: 0.14, mode: effectiveMatchMode, hardExcludeIds: blockedRefIds }
-    ),
-    [variants, referenceAssets, seenRefIds, effectiveMatchMode, blockedRefIds]
-  );
+    );
+  }, [variants, referenceAssets, seenRefIds, effectiveMatchMode, blockedRefIds, round]);
 
   const handleReset = () => {
     const nextBase = createRandomBaseState();

@@ -2,6 +2,12 @@ import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "./types";
 
 const FIRST_ORDER_WEIGHTS = [0.55, 0.45, 0.4, 1.35, 1.35, 0.85, 1.25, 0.6, 1.15];
 
+// Slot index ranges in the flattened first-order array:
+//  color [0-2]: warmth, saturation, lightness
+//  motif [3-5]: geometry, organic, complexity
+//  arrangement [6-8]: order, spacing, direction
+type FirstOrderSlotName = "color" | "motif" | "arrangement";
+
 function flattenFirstOrder(values: FirstOrderSlotValues): number[] {
   return [
     values.color.warmth,
@@ -141,6 +147,119 @@ export function assignDiverseNearestAnnotatedAssets(
       .sort((a, b) => a.score - b.score)[0];
 
     result[target.key] = fallback ? [{ ...fallback, distance: fallback.distance }] : [];
+  }
+
+  return result;
+}
+
+/**
+ * Score a carrier asset for a probing hypothesis.
+ *
+ * Hypothesis-aware scoring boosts the weight on "vary" slot axes (those being explored)
+ * so the carrier genuinely represents the hypothesis direction, rather than just being
+ * the nearest overall asset. "Keep" slot axes are down-weighted so the carrier isn't
+ * penalised for incidental differences on non-hypothesis dimensions.
+ */
+function scoreCarrierForHypothesis(
+  variantValues: FirstOrderSlotValues,
+  asset: AnnotatedAssetRecord,
+  changedSlots: ReadonlyArray<FirstOrderSlotName>,
+  varySlotBoost = 2.0,
+  keepSlotScale = 0.6
+): number {
+  if (!asset.annotation) return Number.POSITIVE_INFINITY;
+  const assetFlat = flattenFirstOrder(asset.annotation.firstOrder);
+  const variantFlat = flattenFirstOrder(variantValues);
+  const changedSet = new Set<FirstOrderSlotName>(changedSlots);
+
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    const slot: FirstOrderSlotName = i < 3 ? "color" : i < 6 ? "motif" : "arrangement";
+    const multiplier = changedSet.has(slot) ? varySlotBoost : keepSlotScale;
+    sum += FIRST_ORDER_WEIGHTS[i] * multiplier * (variantFlat[i] - assetFlat[i]) ** 2;
+  }
+  return Math.sqrt(sum);
+}
+
+/**
+ * Round-level carrier assignment for probing hypothesis cards (rounds 1–3).
+ *
+ * Unlike assignDiverseNearestAnnotatedAssets (plain nearness + diversity penalty),
+ * this function uses hypothesis-aware scoring: the vary-slot axes are weighted higher
+ * so each carrier genuinely represents its hypothesis direction rather than just being
+ * the nearest overall match.
+ *
+ * Assets are assigned greedily with strict uniqueness across the round:
+ * - hardExcludeIds are filtered out before scoring (disliked refs)
+ * - seenIds receive a soft penalty (seen refs)
+ * - No two hypothesis cards in the same round will share a carrier
+ */
+export function assignProbingCarriers(
+  hypotheses: Array<{
+    key: string;
+    variantValues: FirstOrderSlotValues;
+    changedSlots: ReadonlyArray<FirstOrderSlotName>;
+  }>,
+  assets: AnnotatedAssetRecord[],
+  options?: {
+    hardExcludeIds?: string[];
+    seenIds?: string[];
+    seenPenalty?: number;
+    varySlotBoost?: number;
+    keepSlotScale?: number;
+  }
+): Record<string, Array<AnnotatedAssetRecord & { distance: number }>> {
+  const hardExclude = new Set(options?.hardExcludeIds ?? []);
+  const seenIds = options?.seenIds ?? [];
+  const seenPenalty = options?.seenPenalty ?? 0.10;
+  const varySlotBoost = options?.varySlotBoost ?? 2.0;
+  const keepSlotScale = options?.keepSlotScale ?? 0.6;
+
+  const candidates = assets.filter((a) => a.annotation && !hardExclude.has(a.imageId));
+  const selectedIds = new Set<string>();
+  const result: Record<string, Array<AnnotatedAssetRecord & { distance: number }>> = {};
+
+  for (const hypothesis of hypotheses) {
+    // Primary pass: pick best unselected candidate
+    const ranked = candidates
+      .filter((asset) => !selectedIds.has(asset.imageId))
+      .map((asset) => {
+        const baseDistance = scoreCarrierForHypothesis(
+          hypothesis.variantValues,
+          asset,
+          hypothesis.changedSlots,
+          varySlotBoost,
+          keepSlotScale
+        );
+        const seenCount = seenIds.filter((id) => id === asset.imageId).length;
+        return { ...asset, distance: baseDistance, score: baseDistance + seenCount * seenPenalty };
+      })
+      .sort((a, b) => a.score - b.score);
+
+    const chosen = ranked[0];
+    if (chosen) {
+      result[hypothesis.key] = [{ ...chosen, distance: chosen.distance }];
+      selectedIds.add(chosen.imageId);
+      continue;
+    }
+
+    // Fallback: allow a repeat with a soft repeat penalty
+    const fallback = candidates
+      .map((asset) => {
+        const baseDistance = scoreCarrierForHypothesis(
+          hypothesis.variantValues,
+          asset,
+          hypothesis.changedSlots,
+          varySlotBoost,
+          keepSlotScale
+        );
+        const seenCount = seenIds.filter((id) => id === asset.imageId).length;
+        const repeatPenalty = selectedIds.has(asset.imageId) ? 0.08 : 0;
+        return { ...asset, distance: baseDistance, score: baseDistance + seenCount * 0.05 + repeatPenalty };
+      })
+      .sort((a, b) => a.score - b.score)[0];
+
+    result[hypothesis.key] = fallback ? [{ ...fallback, distance: fallback.distance }] : [];
   }
 
   return result;
