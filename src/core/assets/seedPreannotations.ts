@@ -3,6 +3,9 @@ import type { AnnotatedAssetRecord } from "./types";
 /**
  * Draft pre-annotations for the first seed set.
  * These are intentionally editable working values, not final truth.
+ *
+ * roleMap.probeSuitability / preferenceSuitability / convergenceSuitability
+ * are all [0–1] estimates — tune after visual inspection.
  */
 export const seedPreannotations: AnnotatedAssetRecord[] = [
   {
@@ -24,6 +27,16 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       confidence: "medium",
       notes: "Grey abstract gold swirl / gestural contemporary feel.",
     },
+    roleMap: {
+      imageId: "thumbnail.FULI原创_不渝-1_20231208161013A001_36eec244.png",
+      roles: ["preference-carrier"],
+      strongSlots: ["motif", "style"],
+      weakSlots: ["color"],
+      probeSuitability: 0.60,
+      preferenceSuitability: 0.82,
+      convergenceSuitability: 0.45,
+      brandRepresentativeness: 0.80,
+    },
   },
   {
     imageId: "thumbnail.FULI原创_末日荒原-1_20231214170518A025_56a6cf14.png",
@@ -43,6 +56,16 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       annotationSource: "assisted",
       confidence: "medium",
       notes: "Tan branch silhouette / nature-derived abstraction.",
+    },
+    roleMap: {
+      imageId: "thumbnail.FULI原创_末日荒原-1_20231214170518A025_56a6cf14.png",
+      roles: ["probe-carrier"],
+      strongSlots: ["motif", "arrangement"],
+      weakSlots: ["color"],
+      probeSuitability: 0.82,
+      preferenceSuitability: 0.58,
+      convergenceSuitability: 0.35,
+      brandRepresentativeness: 0.80,
     },
   },
   {
@@ -64,6 +87,16 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       confidence: "medium",
       notes: "Taupe grid with biomorphic overlay / hybrid motif.",
     },
+    roleMap: {
+      imageId: "thumbnail.FULI原创_跳动的音符-1_20231214172101A029_917135ca.png",
+      roles: ["probe-carrier"],
+      strongSlots: ["motif", "arrangement"],
+      weakSlots: ["color"],
+      probeSuitability: 0.78,
+      preferenceSuitability: 0.52,
+      convergenceSuitability: 0.32,
+      brandRepresentativeness: 0.78,
+    },
   },
   {
     imageId: "艺术家系列_KUONYESHA_红白_20240108184945A003_20240116095859A007_b1db6268.png",
@@ -83,6 +116,15 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       annotationSource: "assisted",
       confidence: "medium",
       notes: "Concentric warm geometric / boldest in set.",
+    },
+    roleMap: {
+      imageId: "艺术家系列_KUONYESHA_红白_20240108184945A003_20240116095859A007_b1db6268.png",
+      roles: ["probe-carrier"],
+      strongSlots: ["color", "motif", "arrangement"],
+      probeSuitability: 0.95,
+      preferenceSuitability: 0.48,
+      convergenceSuitability: 0.25,
+      brandRepresentativeness: 0.72,
     },
   },
   {
@@ -104,6 +146,16 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       confidence: "medium",
       notes: "Beige feather texture / quiet tactile impression.",
     },
+    roleMap: {
+      imageId: "thumbnail.发现自然_光影浅黄2_20231202130725A323_5765df35.png",
+      roles: ["preference-carrier", "convergence-carrier"],
+      strongSlots: ["color", "impression"],
+      weakSlots: ["motif"],
+      probeSuitability: 0.38,
+      preferenceSuitability: 0.85,
+      convergenceSuitability: 0.75,
+      brandRepresentativeness: 0.70,
+    },
   },
   {
     imageId: "thumbnail.发现自然_光影深_20231202130333A311_5fbe5f1f.png",
@@ -123,6 +175,15 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       annotationSource: "assisted",
       confidence: "medium",
       notes: "Dark blue olive diagonal / moody atmospheric field.",
+    },
+    roleMap: {
+      imageId: "thumbnail.发现自然_光影深_20231202130333A311_5fbe5f1f.png",
+      roles: ["probe-carrier"],
+      strongSlots: ["color", "arrangement"],
+      probeSuitability: 0.80,
+      preferenceSuitability: 0.55,
+      convergenceSuitability: 0.32,
+      brandRepresentativeness: 0.70,
     },
   },
   {
@@ -144,6 +205,15 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       confidence: "medium",
       notes: "Grey taupe erosion / weathered painterly texture.",
     },
+    roleMap: {
+      imageId: "thumbnail.发现自然_光影灰_20231202130656A319_2ae0a58f.png",
+      roles: ["preference-carrier"],
+      strongSlots: ["color", "style"],
+      probeSuitability: 0.50,
+      preferenceSuitability: 0.82,
+      convergenceSuitability: 0.65,
+      brandRepresentativeness: 0.70,
+    },
   },
   {
     imageId: "thumbnail.SC-MC-051-IVORY__1__20240229112943A022_8484d003.png",
@@ -163,6 +233,15 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       annotationSource: "assisted",
       confidence: "medium",
       notes: "Cream horizontal stripe / minimal and airy.",
+    },
+    roleMap: {
+      imageId: "thumbnail.SC-MC-051-IVORY__1__20240229112943A022_8484d003.png",
+      roles: ["probe-carrier"],
+      strongSlots: ["arrangement", "color"],
+      probeSuitability: 0.85,
+      preferenceSuitability: 0.55,
+      convergenceSuitability: 0.60,
+      brandRepresentativeness: 0.55,
     },
   },
   {
@@ -184,6 +263,15 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       confidence: "medium",
       notes: "Dark charcoal stripe / crisp formal minimalism.",
     },
+    roleMap: {
+      imageId: "thumbnail.HM-MC-268A-GREEN__1__20240229113613A029_26c61b40.png",
+      roles: ["probe-carrier"],
+      strongSlots: ["color", "arrangement"],
+      probeSuitability: 0.88,
+      preferenceSuitability: 0.42,
+      convergenceSuitability: 0.42,
+      brandRepresentativeness: 0.55,
+    },
   },
   {
     imageId: "thumbnail.大千纹理_千纹__2_20231130135238A044_ab00cfd4.png",
@@ -203,6 +291,15 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       annotationSource: "assisted",
       confidence: "medium",
       notes: "Blue grey pixel stripe / glitch-like graphic texture.",
+    },
+    roleMap: {
+      imageId: "thumbnail.大千纹理_千纹__2_20231130135238A044_ab00cfd4.png",
+      roles: ["probe-carrier"],
+      strongSlots: ["motif", "color", "arrangement"],
+      probeSuitability: 0.85,
+      preferenceSuitability: 0.52,
+      convergenceSuitability: 0.28,
+      brandRepresentativeness: 0.75,
     },
   },
   {
@@ -224,6 +321,16 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       confidence: "medium",
       notes: "Grey horizontal border / classic bordered woven layout.",
     },
+    roleMap: {
+      imageId: "thumbnail.中国书房_屏1_20231130174733A258_a7b4cb36.png",
+      roles: ["convergence-carrier"],
+      strongSlots: ["arrangement", "style"],
+      weakSlots: ["color"],
+      probeSuitability: 0.42,
+      preferenceSuitability: 0.65,
+      convergenceSuitability: 0.85,
+      brandRepresentativeness: 0.80,
+    },
   },
   {
     imageId: "thumbnail.印迹_石音__20231130174450A251_18e471a9.png",
@@ -243,6 +350,16 @@ export const seedPreannotations: AnnotatedAssetRecord[] = [
       annotationSource: "assisted",
       confidence: "medium",
       notes: "Cream brown abstract shapes / artisanal collage feel.",
+    },
+    roleMap: {
+      imageId: "thumbnail.印迹_石音__20231130174450A251_18e471a9.png",
+      roles: ["preference-carrier"],
+      strongSlots: ["motif", "style"],
+      weakSlots: ["arrangement"],
+      probeSuitability: 0.55,
+      preferenceSuitability: 0.82,
+      convergenceSuitability: 0.55,
+      brandRepresentativeness: 0.75,
     },
   },
 ];
