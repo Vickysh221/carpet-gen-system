@@ -132,7 +132,7 @@ export function SimulatorPage() {
   const [anchors, setAnchors] = useState<AnchorCard[]>([]);
   const [likedHistory, setLikedHistory] = useState<LikedHistoryCard[]>([]);
   const [finalChoice, setFinalChoice] = useState<VariantCard | null>(null);
-  const [assetSourceMode, setAssetSourceMode] = useState<AssetSourceMode>("core-only");
+  const [assetSourceMode, setAssetSourceMode] = useState<AssetSourceMode>("core+extended");
   const [matchMode, setMatchMode] = useState<"auto" | "stable" | "explore">("auto");
   const [seenRefIds, setSeenRefIds] = useState<string[]>([]);
   const [rejectedRefIds, setRejectedRefIds] = useState<string[]>([]);
