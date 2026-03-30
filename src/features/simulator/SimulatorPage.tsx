@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
-import { RefreshCw, Play, Heart, X, Trophy } from "lucide-react";
+import { RefreshCw, Play, Heart, X, Trophy, ChevronDown, ChevronUp } from "lucide-react";
 
 import { collectLikedAnchors, createRandomBaseState, generateRoundVariants, getPrimarySlot, getRoundMode, reduceRound } from "./mockEngine";
+import { buildIntentStabilizationSnapshot, type IntentUnderstandingSnapshot } from "./intentStabilization";
 import { explainRound } from "./ontology";
-import { initializeBaseStateFromEntryAgent } from "./semanticInitialization";
+import { buildInitializationExplainability } from "./semanticInitialization";
+import { buildConversationStateLogSummary, type ConversationStateLogSummary, type InitializationExplainabilityResult } from "./explainability";
+import { MatchedRefInspectPanel } from "./MatchedRefInspectPanel";
 import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSources";
 import { assignDiverseNearestAnnotatedAssets, assignProbingCarriers, findNearestAnnotatedAssets, findExploratoryAnnotatedAssets } from "@/core/assets/matching";
 import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "@/core/assets/types";
@@ -17,6 +20,11 @@ interface LikedHistoryCard {
   round: number;
   variant: VariantCard;
   matchedAsset?: AnnotatedAssetRecord & { distance: number };
+}
+
+interface SelectedRefInspectState {
+  label: string;
+  asset: AnnotatedAssetRecord & { distance: number };
 }
 
 function formatPercent(value: number) {
@@ -83,7 +91,19 @@ function MiniPreview({ state }: { state: SimulatorState }) {
   );
 }
 
-function MatchedFuliPreview({ title, state, matchedAsset, badge }: { title: string; state?: SimulatorState; matchedAsset?: AnnotatedAssetRecord & { distance: number }; badge: string }) {
+function MatchedFuliPreview({
+  title,
+  state,
+  matchedAsset,
+  badge,
+  onInspect,
+}: {
+  title: string;
+  state?: SimulatorState;
+  matchedAsset?: AnnotatedAssetRecord & { distance: number };
+  badge: string;
+  onInspect?: (asset: AnnotatedAssetRecord & { distance: number }) => void;
+}) {
   if (!matchedAsset && state) {
     return <div><div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">{title}</div><MiniPreview state={state} /></div>;
   }
@@ -97,6 +117,15 @@ function MatchedFuliPreview({ title, state, matchedAsset, badge }: { title: stri
           <div className="inline-flex rounded-full bg-white/85 px-3 py-1 text-xs font-medium text-stone-800 backdrop-blur-sm">{badge} · dist {matchedAsset.distance.toFixed(2)}</div>
           <div className="mt-2 text-sm font-semibold text-white">{matchedAsset.title}</div>
           <div className="mt-1 text-xs text-white/85">source {matchedAsset.annotation?.annotationSource ?? (matchedAsset.tags?.includes("extended") ? "extended-registry" : "unknown")}</div>
+          {onInspect && matchedAsset.annotation && (
+            <button
+              type="button"
+              onClick={() => onInspect(matchedAsset)}
+              className="mt-3 inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-xs font-medium text-stone-800 backdrop-blur-sm"
+            >
+              Inspect ref
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -123,10 +152,128 @@ function RefAssetCard({ asset }: { asset: AnnotatedAssetRecord & { distance: num
   );
 }
 
-function VariantCardView({ variant, feedback, matchedAsset, onFeedback, onFinalize, likedPinned = false }: { variant: VariantCard; feedback?: "liked" | "disliked"; matchedAsset?: AnnotatedAssetRecord & { distance: number }; onFeedback?: (variantId: string, value: "liked" | "disliked") => void; onFinalize?: (variant: VariantCard) => void; likedPinned?: boolean; }) {
+function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary: ConversationStateLogSummary; expanded: boolean; onToggle: () => void }) {
+  const compactLines = [
+    `Turn ${summary.turnCount} · ${summary.readyToGenerate ? "ready to generate" : "still stabilizing"}`,
+    summary.currentUnderstanding,
+    summary.stateConstruction.appliedDeltaSummaries[0] ?? "No initialization delta was applied.",
+    summary.stateConstruction.appliedDeltaSummaries[1],
+  ].filter(Boolean);
+
+  return (
+    <div className="rounded-[24px] border border-stone-200 bg-stone-50 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">State inspect</div>
+          <div className="mt-2 space-y-1.5 text-sm leading-6 text-stone-700">
+            {compactLines.map((line) => (
+              <div key={line}>{line}</div>
+            ))}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="inline-flex items-center gap-2 rounded-full border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-stone-700"
+        >
+          {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          {expanded ? "Collapse" : "Inspect"}
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="mt-4 space-y-4 border-t border-stone-200 pt-4 text-sm text-stone-700">
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Turn summary</div>
+            <div className="mt-2 space-y-2 text-sm leading-6">
+              <div><span className="font-medium text-stone-800">Accumulated text:</span> {summary.userText}</div>
+              <div><span className="font-medium text-stone-800">Current understanding:</span> {summary.currentUnderstanding}</div>
+              <div><span className="font-medium text-stone-800">Follow-up / decision:</span> {summary.followUpQuestion}</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Interpretation summary</div>
+            <div className="mt-2 space-y-2 text-sm leading-6">
+              <div><span className="font-medium text-stone-800">Hit fields:</span> {summary.interpretation.hitFieldLabels.join(", ") || "none"}</div>
+              <div><span className="font-medium text-stone-800">Ambiguity:</span> {summary.interpretation.ambiguitySummary}</div>
+              <div><span className="font-medium text-stone-800">QA mode:</span> {summary.interpretation.qaModeLabel}</div>
+              <div><span className="font-medium text-stone-800">Follow-up target:</span> {summary.interpretation.followUpTargetLabel}</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">State construction</div>
+            <div className="mt-2 space-y-3 text-sm leading-6">
+              <div>
+                <span className="font-medium text-stone-800">Axis hints:</span>{" "}
+                {summary.stateConstruction.axisHintSummaries.join(" · ") || "none"}
+              </div>
+              <div>
+                <span className="font-medium text-stone-800">Weak bias:</span>{" "}
+                {summary.stateConstruction.weakBiasSummaries.length === 0
+                  ? "none"
+                  : summary.stateConstruction.weakBiasSummaries
+                      .map((item) => `${item.source} (${item.summaries.join(" · ")})`)
+                      .join(" / ")}
+              </div>
+              <div>
+                <span className="font-medium text-stone-800">Applied initialization delta:</span>{" "}
+                {summary.stateConstruction.appliedDeltaSummaries.join(" / ") || "none"}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Delta explanation</div>
+            <div className="mt-2 space-y-2">
+              {summary.deltaExplanation.length === 0 ? (
+                <div className="text-sm text-stone-600">No direct initialization delta was applied.</div>
+              ) : (
+                summary.deltaExplanation.map((item) => (
+                  <div key={item.axisPath} className="rounded-xl bg-stone-50 px-3 py-2 text-sm text-stone-700">
+                    <span className="font-medium text-stone-800">{item.summary}</span>
+                    {" · "}
+                    {item.gloss}
+                    {" · "}
+                    {Math.round(item.before * 100)}% → {Math.round(item.after * 100)}%
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VariantCardView({
+  variant,
+  feedback,
+  matchedAsset,
+  onFeedback,
+  onFinalize,
+  onInspectRef,
+  likedPinned = false,
+}: {
+  variant: VariantCard;
+  feedback?: "liked" | "disliked";
+  matchedAsset?: AnnotatedAssetRecord & { distance: number };
+  onFeedback?: (variantId: string, value: "liked" | "disliked") => void;
+  onFinalize?: (variant: VariantCard) => void;
+  onInspectRef?: (asset: AnnotatedAssetRecord & { distance: number }) => void;
+  likedPinned?: boolean;
+}) {
   return (
     <div className={`rounded-[28px] border bg-white p-4 shadow-sm ${likedPinned ? "border-emerald-300" : "border-stone-200"}`}>
-      <MatchedFuliPreview title={likedPinned ? "Liked ref" : "Matched ref"} state={variant.state} matchedAsset={matchedAsset} badge={likedPinned ? "liked" : "variant ref"} />
+      <MatchedFuliPreview
+        title={likedPinned ? "Liked ref" : "Matched ref"}
+        state={variant.state}
+        matchedAsset={matchedAsset}
+        badge={likedPinned ? "liked" : "variant ref"}
+        onInspect={onInspectRef}
+      />
       <div className="mt-4 flex items-start justify-between gap-3">
         <div><div className="text-sm font-semibold text-stone-900">{variant.label}</div><div className="mt-1 text-xs text-stone-500">{variant.summary}</div></div>
         {onFinalize ? <button onClick={() => onFinalize(variant)} className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700"><Trophy className="h-3.5 w-3.5" /> Final</button> : <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">Liked</div>}
@@ -146,8 +293,11 @@ export function SimulatorPage() {
   const [baseState, setBaseState] = useState<SimulatorState>(() => createRandomBaseState());
   const [variants, setVariants] = useState<VariantCard[]>(() => generateRoundVariants(createRandomBaseState(), 1));
   const [entryText, setEntryText] = useState("");
-  const [entryDebugSummary, setEntryDebugSummary] = useState<string | null>(null);
+  const [intentSnapshot, setIntentSnapshot] = useState<IntentUnderstandingSnapshot | null>(null);
   const [entryAnalysis, setEntryAnalysis] = useState<EntryAgentResult | null>(null);
+  const [initializationExplainability, setInitializationExplainability] = useState<InitializationExplainabilityResult | null>(null);
+  const [isInspectExpanded, setIsInspectExpanded] = useState(false);
+  const [selectedRefInspect, setSelectedRefInspect] = useState<SelectedRefInspectState | null>(null);
   const [feedbackMap, setFeedbackMap] = useState<Record<string, "liked" | "disliked">>({});
   const [anchors, setAnchors] = useState<AnchorCard[]>([]);
   const [likedHistory, setLikedHistory] = useState<LikedHistoryCard[]>([]);
@@ -173,6 +323,21 @@ export function SimulatorPage() {
 
   const preferenceCenter = useMemo(() => averagePreferenceState(anchors.map((anchor) => anchor.state)), [anchors]);
   const totalAnnotatedAssetCount = useMemo(() => referenceAssets.filter((asset) => asset.annotation).length, [referenceAssets]);
+  const conversationStateLogSummary = useMemo(() => {
+    if (!intentSnapshot || !initializationExplainability) {
+      return null;
+    }
+
+    return buildConversationStateLogSummary({
+      text: intentSnapshot.text,
+      turnCount: intentSnapshot.turnCount,
+      currentUnderstanding: intentSnapshot.currentUnderstanding,
+      followUpQuestion: intentSnapshot.followUpQuestion,
+      readyToGenerate: intentSnapshot.readyToGenerate,
+      analysis: intentSnapshot.analysis,
+      initialization: initializationExplainability,
+    });
+  }, [intentSnapshot, initializationExplainability]);
 
   const baseNearestRefs = useMemo(() => findNearestAnnotatedAssets(firstOrderFromState(baseState), referenceAssets, 3), [baseState, referenceAssets]);
   const preferenceRef = useMemo(() => {
@@ -212,8 +377,11 @@ export function SimulatorPage() {
     setBaseState(nextBase);
     setVariants(generateRoundVariants(nextBase, 1));
     setEntryText("");
-    setEntryDebugSummary(null);
+    setIntentSnapshot(null);
     setEntryAnalysis(null);
+    setInitializationExplainability(null);
+    setIsInspectExpanded(false);
+    setSelectedRefInspect(null);
     setFeedbackMap({});
     setAnchors([]);
     setLikedHistory([]);
@@ -227,23 +395,42 @@ export function SimulatorPage() {
     setFeedbackMap((prev) => ({ ...prev, [variantId]: prev[variantId] === value ? undefined as never : value }));
   };
 
-  const handleStartFromText = () => {
+  const handleContinueIntent = () => {
     const trimmedText = entryText.trim();
 
     if (!trimmedText) {
+      setIntentSnapshot(null);
       setEntryAnalysis(null);
-      setEntryDebugSummary("请输入一句偏好描述。");
       return;
     }
 
-    const analysis = analyzeEntryText({ text: trimmedText });
-    const nextBase = initializeBaseStateFromEntryAgent(analysis);
+    const nextSnapshot = buildIntentStabilizationSnapshot({
+      previousText: intentSnapshot?.text,
+      nextReply: trimmedText,
+      previousTurnCount: intentSnapshot?.turnCount ?? 0,
+    });
+
+    setIntentSnapshot(nextSnapshot);
+    setEntryAnalysis(nextSnapshot.analysis);
+    setEntryText("");
+  };
+
+  const handleStartFromText = () => {
+    if (!intentSnapshot?.readyToGenerate) {
+      return;
+    }
+
+    const analysis = intentSnapshot.analysis;
+    const initialization = buildInitializationExplainability(analysis);
+    const nextBase = initialization.finalBase;
 
     setRound(1);
     setBaseState(nextBase);
     setVariants(generateRoundVariants(nextBase, 1));
     setEntryAnalysis(analysis);
-    setEntryDebugSummary(summarizeEntryAnalysis(analysis));
+    setInitializationExplainability(initialization);
+    setIsInspectExpanded(false);
+    setSelectedRefInspect(null);
     setFeedbackMap({});
     setAnchors([]);
     setLikedHistory([]);
@@ -288,6 +475,7 @@ export function SimulatorPage() {
     setBaseState(nextBase);
     setRound(nextRound);
     setVariants(generateRoundVariants(nextBase, nextRound));
+    setSelectedRefInspect(null);
     setFeedbackMap({});
     setAssetPoolExhausted(nextBlocked.length >= totalAnnotatedAssetCount);
   };
@@ -312,54 +500,90 @@ export function SimulatorPage() {
         <div className="mb-6 rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
           <div className="grid gap-5 lg:grid-cols-[1.3fr_0.9fr]">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Text-only entry</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Intent stabilization</div>
               <div className="mt-2 text-sm leading-6 text-stone-600">
-                输入一句偏好描述。下一步会把它接到 semantic-initialized base state，当前先保留最小入口与摘要区域。
+                先用 2-3 轮简短交流把方向收一收，再进入第一轮视觉探索。
               </div>
               <textarea
                 value={entryText}
                 onChange={(event) => setEntryText(event.target.value)}
-                placeholder="例如：想给卧室找一块更安静一点、不要太花的地毯"
+                placeholder={intentSnapshot ? "顺着上面的问题继续回应即可" : "例如：想给卧室找一块更安静一点、不要太花的地毯"}
                 className="mt-4 min-h-[112px] w-full rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-stone-500 focus:bg-white"
               />
               <div className="mt-4 flex flex-wrap gap-3">
                 <button
                   type="button"
-                  onClick={handleStartFromText}
+                  onClick={handleContinueIntent}
                   className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white"
                 >
-                  <Play className="h-4 w-4" /> Start from text
+                  <Play className="h-4 w-4" /> {intentSnapshot ? "继续回应" : "开始理解"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartFromText}
+                  disabled={!intentSnapshot?.readyToGenerate}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Play className="h-4 w-4" /> 进入探索
                 </button>
                 <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-500">
-                  当前策略：random base + semantic statePatch，再进入现有 round 1 流程。
+                  最多 3 轮，最快 2 轮进入探索。
                 </div>
               </div>
             </div>
 
             <div className="rounded-[24px] border border-stone-200 bg-stone-50 p-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Semantic debug</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Current understanding</div>
               <div className="mt-3 space-y-3 text-sm text-stone-600">
                 <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Status</div>
-                  <div className="mt-2 text-sm text-stone-700">{entryDebugSummary ?? "尚未触发 text initialization。"}</div>
-                </div>
-                {entryAnalysis && (
-                  <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
-                    <div>hits: {entryAnalysis.hitFields.length > 0 ? entryAnalysis.hitFields.join(", ") : "none"}</div>
-                    <div className="mt-1">qa: {entryAnalysis.suggestedQaMode}</div>
-                    <div className="mt-1">semantic hints: {Object.keys(entryAnalysis.provisionalStateHints).join(", ") || "none"}</div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Current understanding</div>
+                  <div className="mt-2 text-sm leading-6 text-stone-700">
+                    {intentSnapshot?.currentUnderstanding ?? "你先说一句你的直觉，我会先帮你收一个粗方向。"}
                   </div>
-                )}
+                </div>
+                <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Next question</div>
+                  <div className="mt-2 text-sm leading-6 text-stone-700">
+                    {intentSnapshot?.followUpQuestion ?? "我会先抓最值得确认的一点，再问你下一句。"}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
+                  当前轮次：{intentSnapshot?.turnCount ?? 0}/3
+                  <div className="mt-1">
+                    {intentSnapshot?.readyToGenerate
+                      ? "当前方向已经足够粗稳，可以进入第一轮探索。"
+                      : "还不会立刻进入探索，先把最关键的一点再收清楚。"}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
+
+          {conversationStateLogSummary && (
+            <div className="mt-5">
+              <ConversationStateInspectCard
+                summary={conversationStateLogSummary}
+                expanded={isInspectExpanded}
+                onToggle={() => setIsInspectExpanded((prev) => !prev)}
+              />
+            </div>
+          )}
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[1.1fr_1.6fr]">
           <div className="space-y-6">
             <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between"><div><div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Base State</div><div className="mt-1 text-lg font-semibold text-stone-900">Round {round}</div></div>{finalChoice && <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">已选最终方案</div>}</div>
-              <div className="grid gap-4 md:grid-cols-2"><MatchedFuliPreview title="Base ref" state={baseState} matchedAsset={baseNearestRefs[0]} badge="base ref" /><MatchedFuliPreview title="Preference ref" matchedAsset={preferenceRef} badge="preference ref" /></div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <MatchedFuliPreview
+                  title="Base ref"
+                  state={baseState}
+                  matchedAsset={baseNearestRefs[0]}
+                  badge="base ref"
+                  onInspect={(asset) => setSelectedRefInspect({ label: "base ref", asset })}
+                />
+                <MatchedFuliPreview title="Preference ref" matchedAsset={preferenceRef} badge="preference ref" />
+              </div>
               <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50 p-4">
                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Round logic</div>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-stone-800">
@@ -381,8 +605,18 @@ export function SimulatorPage() {
           </div>
 
           <div>
+            {selectedRefInspect && (
+              <div className="mb-5">
+                <MatchedRefInspectPanel
+                  asset={selectedRefInspect.asset}
+                  baseState={baseState}
+                  label={selectedRefInspect.label}
+                  onClose={() => setSelectedRefInspect(null)}
+                />
+              </div>
+            )}
             <div className="mb-4 flex items-center justify-between"><div><div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Current variants</div><div className="mt-1 text-sm text-stone-600">点击继续生成下一轮后：liked 保留到下方，disliked 消失，新出现的素材不会重复，直到素材池穷尽。</div></div></div>
-            <div className="grid gap-5 xl:grid-cols-2">{variants.map((variant) => <VariantCardView key={variant.id} variant={variant} feedback={feedbackMap[variant.id]} matchedAsset={variantNearestRefsMap[variant.id]?.[0]} onFeedback={handleFeedback} onFinalize={(nextFinal) => setFinalChoice(nextFinal)} />)}</div>
+            <div className="grid gap-5 xl:grid-cols-2">{variants.map((variant) => <VariantCardView key={variant.id} variant={variant} feedback={feedbackMap[variant.id]} matchedAsset={variantNearestRefsMap[variant.id]?.[0]} onFeedback={handleFeedback} onFinalize={(nextFinal) => setFinalChoice(nextFinal)} onInspectRef={(asset) => setSelectedRefInspect({ label: `${variant.label} matched ref`, asset })} />)}</div>
             {likedHistory.length > 0 && <div className="mt-6"><div className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Previously liked</div><div className="grid gap-5 xl:grid-cols-2">{likedHistory.map((item) => <VariantCardView key={item.id} variant={item.variant} matchedAsset={item.matchedAsset} likedPinned />)}</div></div>}
           </div>
         </div>
