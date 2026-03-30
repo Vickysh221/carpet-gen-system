@@ -3,9 +3,11 @@ import { RefreshCw, Play, Heart, X, Trophy } from "lucide-react";
 
 import { collectLikedAnchors, createRandomBaseState, generateRoundVariants, getPrimarySlot, getRoundMode, reduceRound } from "./mockEngine";
 import { explainRound } from "./ontology";
+import { initializeBaseStateFromEntryAgent } from "./semanticInitialization";
 import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSources";
 import { assignDiverseNearestAnnotatedAssets, assignProbingCarriers, findNearestAnnotatedAssets, findExploratoryAnnotatedAssets } from "@/core/assets/matching";
 import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "@/core/assets/types";
+import { analyzeEntryText, type EntryAgentResult } from "@/features/entryAgent";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
 
 const PROBING_ROUND_LIMIT = 3;
@@ -19,6 +21,21 @@ interface LikedHistoryCard {
 
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
+}
+
+function summarizeEntryAnalysis(analysis: EntryAgentResult) {
+  const hitFields = analysis.hitFields.length > 0 ? analysis.hitFields.join(", ") : "none";
+  const semanticHintKeys = Object.keys(analysis.provisionalStateHints);
+  const semanticHintsLabel = semanticHintKeys.length > 0 ? semanticHintKeys.join(", ") : "none";
+  const followUpTarget = analysis.suggestedFollowUpTarget ?? "none";
+
+  return [
+    `hit fields: ${hitFields}`,
+    `qa mode: ${analysis.suggestedQaMode}`,
+    `follow-up target: ${followUpTarget}`,
+    `semantic hints: ${semanticHintsLabel}`,
+    `ambiguities: ${analysis.ambiguities.length}`,
+  ].join(" · ");
 }
 
 function firstOrderFromState(state: SimulatorState): FirstOrderSlotValues {
@@ -128,6 +145,9 @@ export function SimulatorPage() {
   const [round, setRound] = useState(1);
   const [baseState, setBaseState] = useState<SimulatorState>(() => createRandomBaseState());
   const [variants, setVariants] = useState<VariantCard[]>(() => generateRoundVariants(createRandomBaseState(), 1));
+  const [entryText, setEntryText] = useState("");
+  const [entryDebugSummary, setEntryDebugSummary] = useState<string | null>(null);
+  const [entryAnalysis, setEntryAnalysis] = useState<EntryAgentResult | null>(null);
   const [feedbackMap, setFeedbackMap] = useState<Record<string, "liked" | "disliked">>({});
   const [anchors, setAnchors] = useState<AnchorCard[]>([]);
   const [likedHistory, setLikedHistory] = useState<LikedHistoryCard[]>([]);
@@ -191,6 +211,9 @@ export function SimulatorPage() {
     setRound(1);
     setBaseState(nextBase);
     setVariants(generateRoundVariants(nextBase, 1));
+    setEntryText("");
+    setEntryDebugSummary(null);
+    setEntryAnalysis(null);
     setFeedbackMap({});
     setAnchors([]);
     setLikedHistory([]);
@@ -202,6 +225,32 @@ export function SimulatorPage() {
 
   const handleFeedback = (variantId: string, value: "liked" | "disliked") => {
     setFeedbackMap((prev) => ({ ...prev, [variantId]: prev[variantId] === value ? undefined as never : value }));
+  };
+
+  const handleStartFromText = () => {
+    const trimmedText = entryText.trim();
+
+    if (!trimmedText) {
+      setEntryAnalysis(null);
+      setEntryDebugSummary("请输入一句偏好描述。");
+      return;
+    }
+
+    const analysis = analyzeEntryText({ text: trimmedText });
+    const nextBase = initializeBaseStateFromEntryAgent(analysis);
+
+    setRound(1);
+    setBaseState(nextBase);
+    setVariants(generateRoundVariants(nextBase, 1));
+    setEntryAnalysis(analysis);
+    setEntryDebugSummary(summarizeEntryAnalysis(analysis));
+    setFeedbackMap({});
+    setAnchors([]);
+    setLikedHistory([]);
+    setFinalChoice(null);
+    setSeenRefIds([]);
+    setRejectedRefIds([]);
+    setAssetPoolExhausted(false);
   };
 
   const handleContinue = () => {
@@ -257,6 +306,52 @@ export function SimulatorPage() {
           <div className="flex flex-wrap gap-3">
             <button onClick={handleReset} className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-4 py-3 text-sm font-medium text-stone-700"><RefreshCw className="h-4 w-4" /> 重置</button>
             <button onClick={handleContinue} disabled={!canContinue} className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"><Play className="h-4 w-4" /> 继续生成下一轮</button>
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-5 lg:grid-cols-[1.3fr_0.9fr]">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Text-only entry</div>
+              <div className="mt-2 text-sm leading-6 text-stone-600">
+                输入一句偏好描述。下一步会把它接到 semantic-initialized base state，当前先保留最小入口与摘要区域。
+              </div>
+              <textarea
+                value={entryText}
+                onChange={(event) => setEntryText(event.target.value)}
+                placeholder="例如：想给卧室找一块更安静一点、不要太花的地毯"
+                className="mt-4 min-h-[112px] w-full rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-stone-500 focus:bg-white"
+              />
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleStartFromText}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white"
+                >
+                  <Play className="h-4 w-4" /> Start from text
+                </button>
+                <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-500">
+                  当前策略：random base + semantic statePatch，再进入现有 round 1 流程。
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[24px] border border-stone-200 bg-stone-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Semantic debug</div>
+              <div className="mt-3 space-y-3 text-sm text-stone-600">
+                <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Status</div>
+                  <div className="mt-2 text-sm text-stone-700">{entryDebugSummary ?? "尚未触发 text initialization。"}</div>
+                </div>
+                {entryAnalysis && (
+                  <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
+                    <div>hits: {entryAnalysis.hitFields.length > 0 ? entryAnalysis.hitFields.join(", ") : "none"}</div>
+                    <div className="mt-1">qa: {entryAnalysis.suggestedQaMode}</div>
+                    <div className="mt-1">semantic hints: {Object.keys(entryAnalysis.provisionalStateHints).join(", ") || "none"}</div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
