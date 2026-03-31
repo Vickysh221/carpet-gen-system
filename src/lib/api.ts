@@ -153,6 +153,33 @@ export type PreferenceProfile = {
   lockedCandidateIds: string[];
 };
 
+type ApiPrototypeRetrievalItem = {
+  entry_id: string;
+  prototype_id: string;
+  label: string;
+  route_type: string;
+  field: string;
+  reading_ids: string[];
+  similarity_score: number;
+  explain_text: string;
+};
+
+type ApiPrototypeRetrievalResponse = {
+  total: number;
+  items: ApiPrototypeRetrievalItem[];
+};
+
+export type PrototypeRetrievalHit = {
+  entryId: string;
+  prototypeId: string;
+  label: string;
+  routeType: string;
+  field: string;
+  readingIds: string[];
+  similarityScore: number;
+  explainText: string;
+};
+
 function mapAxis(axis: ApiInternalAxis): InternalAxis {
   return {
     key: axis.key,
@@ -262,6 +289,27 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fetchModelConfig() {
   return apiRequest<ModelConfig>("/model-config");
+}
+
+export async function fetchPrototypeRetrieval(text: string, topK = 5): Promise<PrototypeRetrievalHit[]> {
+  const response = await apiRequest<ApiPrototypeRetrievalResponse>("/prototype-retrieval/search", {
+    method: "POST",
+    body: JSON.stringify({
+      text,
+      top_k: topK,
+    }),
+  });
+
+  return response.items.map((item) => ({
+    entryId: item.entry_id,
+    prototypeId: item.prototype_id,
+    label: item.label,
+    routeType: item.route_type,
+    field: item.field,
+    readingIds: item.reading_ids,
+    similarityScore: item.similarity_score,
+    explainText: item.explain_text,
+  }));
 }
 
 export async function bootstrapSession(referenceImageName: string, clientId?: string) {

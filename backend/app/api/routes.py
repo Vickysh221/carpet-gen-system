@@ -13,6 +13,9 @@ from app.schemas import (
     PreferenceProfileResponse,
     PreferenceUndoResponse,
     ProductReferenceListResponse,
+    PrototypeRetrievalRequest,
+    PrototypeRetrievalResponse,
+    PrototypeRetrievalEntryResponse,
     PromptTrace,
 )
 from app.services.retrieval_models import IndexBuildResponse, SearchMatchResponse, SearchResponse
@@ -29,6 +32,7 @@ from app.services.preference_store import (
     undo_latest_feedback,
 )
 from app.services.reference_library import load_fuli_products
+from app.services.prototype_text_retrieval import ensure_prototype_text_index, search_prototype_entries
 from app.services.visual_search import ensure_search_index, search_similar_products
 from app.services.mock_data import build_prompt_trace, build_session
 from app.services.prompt_composer import compose_from_liked_ids, compose_from_reference_id
@@ -95,6 +99,20 @@ async def search_fuli_products(
     return SearchResponse(
         total=len(matches),
         items=[SearchMatchResponse(**match.__dict__) for match in matches],
+    )
+
+
+@router.post("/prototype-retrieval/index")
+def build_prototype_retrieval_index() -> dict[str, int | str]:
+    return ensure_prototype_text_index()
+
+
+@router.post("/prototype-retrieval/search", response_model=PrototypeRetrievalResponse)
+def search_prototype_retrieval(payload: PrototypeRetrievalRequest) -> PrototypeRetrievalResponse:
+    matches = search_prototype_entries(query_text=payload.text, top_k=payload.top_k)
+    return PrototypeRetrievalResponse(
+        total=len(matches),
+        items=[PrototypeRetrievalEntryResponse(**match.__dict__) for match in matches],
     )
 
 

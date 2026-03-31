@@ -1,4 +1,5 @@
 import type { EntryAgentInput, HighValueField, QaMode, SlotStateStatus } from "../types";
+import type { SemanticGapType } from "../types";
 
 interface EntryAgentFixtureExpectation {
   hitFields?: HighValueField[];
@@ -9,6 +10,13 @@ interface EntryAgentFixtureExpectation {
   requiredWeakBiasSources?: string[];
   requiredPatchPaths?: string[];
   requiredSemanticHints?: string[];
+  requiredPrototypeMatches?: string[];
+  requiredKeptReadings?: string[];
+  requiredSuppressedReadings?: string[];
+  requiredMergeRelations?: string[];
+  fallbackTriggered?: boolean;
+  requiredSemanticGapTypes?: SemanticGapType[];
+  questionIntent?: string;
 }
 
 export interface EntryAgentFixture {
@@ -19,31 +27,44 @@ export interface EntryAgentFixture {
 
 export const ENTRY_AGENT_FIXTURES: EntryAgentFixture[] = [
   {
-    name: "impression-led warm",
-    input: { text: "想要温暖一点" },
+    name: "prototype-first coffee",
+    input: { text: "想要一点咖啡感" },
     expectation: {
-      hitFields: ["overallImpression", "colorMood"],
-      suggestedQaMode: "exploratory-intake",
-      ambiguityIncludes: ["温暖/温馨"],
-      requiredAxisHints: ["impression.softness", "color.warmth"],
-      requiredPatchPaths: ["impression.softness", "color.warmth"],
-      requiredSemanticHints: ["impression"],
-    },
-  },
-  {
-    name: "impression-led calm",
-    input: { text: "想更安静一点" },
-    expectation: {
-      hitFields: ["overallImpression"],
-      updatedSlotStates: { overallImpression: "tentative" },
+      hitFields: ["colorMood"],
+      updatedSlotStates: { colorMood: "tentative" },
       suggestedQaMode: "slot-completion",
-      requiredAxisHints: ["impression.calm", "arrangement.spacing"],
-      requiredPatchPaths: ["impression.calm", "color.saturation"],
-      requiredSemanticHints: ["impression"],
+      requiredAxisHints: ["color.warmth", "color.saturation"],
+      requiredPatchPaths: ["color.warmth", "impression.softness"],
+      requiredSemanticHints: ["colorMood", "impression"],
+      requiredPrototypeMatches: ["coffee"],
+      requiredKeptReadings: ["prototype:coffee:coffee-color-warmth"],
+      requiredMergeRelations: [],
+      fallbackTriggered: false,
+      requiredSemanticGapTypes: ["missing-slot"],
+      questionIntent: "fill-missing-slot",
     },
   },
   {
-    name: "pattern-led floral restraint",
+    name: "dual-route natural",
+    input: { text: "想自然一点" },
+    expectation: {
+      hitFields: ["patternTendency"],
+      updatedSlotStates: { patternTendency: "tentative" },
+      suggestedQaMode: "slot-completion",
+      requiredAxisHints: ["motif.organic", "color.saturation"],
+      requiredPatchPaths: ["motif.organic", "impression.softness"],
+      requiredSemanticHints: ["patternTendency"],
+      requiredPrototypeMatches: ["natural-ease"],
+      requiredKeptReadings: ["prototype:natural-ease:natural-organic"],
+      requiredSuppressedReadings: ["direct-pattern-natural"],
+      requiredMergeRelations: ["reinforcement"],
+      fallbackTriggered: false,
+      requiredSemanticGapTypes: ["missing-slot"],
+      questionIntent: "fill-missing-slot",
+    },
+  },
+  {
+    name: "direct-first floral restraint",
     input: { text: "不要太花" },
     expectation: {
       hitFields: ["patternTendency"],
@@ -53,95 +74,13 @@ export const ENTRY_AGENT_FIXTURES: EntryAgentFixture[] = [
       requiredAxisHints: ["motif.complexity"],
       requiredPatchPaths: ["motif.complexity", "color.saturation"],
       requiredSemanticHints: ["patternComplexity"],
-    },
-  },
-  {
-    name: "pattern-led fragmented restraint",
-    input: { text: "图案别太碎" },
-    expectation: {
-      hitFields: ["patternTendency"],
-      updatedSlotStates: { patternTendency: "tentative" },
-      suggestedQaMode: "slot-completion",
-      requiredAxisHints: ["motif.complexity"],
-      requiredPatchPaths: ["motif.complexity"],
-      requiredSemanticHints: ["patternComplexity"],
-    },
-  },
-  {
-    name: "space-led bedroom",
-    input: { text: "给卧室用的" },
-    expectation: {
-      hitFields: ["spaceContext"],
-      updatedSlotStates: { spaceContext: "tentative" },
-      suggestedQaMode: "slot-completion",
-      requiredWeakBiasSources: ["spaceContext: bedroom"],
-      requiredSemanticHints: ["roomType"],
-    },
-  },
-  {
-    name: "space-led living room",
-    input: { text: "想放客厅" },
-    expectation: {
-      hitFields: ["spaceContext"],
-      updatedSlotStates: { spaceContext: "tentative" },
-      suggestedQaMode: "slot-completion",
-      requiredWeakBiasSources: ["spaceContext: livingRoom"],
-      requiredSemanticHints: ["roomType"],
-    },
-  },
-  {
-    name: "mixed bedroom calm restrained pattern",
-    input: { text: "想给卧室找一块更安静一点、不要太花的地毯" },
-    expectation: {
-      hitFields: ["spaceContext", "overallImpression", "patternTendency"],
-      updatedSlotStates: {
-        spaceContext: "tentative",
-        overallImpression: "tentative",
-        patternTendency: "weak-signal",
-      },
-      suggestedQaMode: "slot-completion",
-      ambiguityIncludes: ["不要太花"],
-      requiredAxisHints: ["impression.calm", "motif.complexity"],
-      requiredWeakBiasSources: ["spaceContext: bedroom"],
-      requiredPatchPaths: ["impression.calm", "motif.complexity"],
-      requiredSemanticHints: ["roomType", "impression", "patternComplexity"],
-    },
-  },
-  {
-    name: "mixed living room presence but not tacky",
-    input: { text: "客厅想更有存在感一点，但别太俗" },
-    expectation: {
-      hitFields: ["spaceContext", "overallImpression"],
-      updatedSlotStates: {
-        spaceContext: "tentative",
-        overallImpression: "tentative",
-      },
-      suggestedQaMode: "slot-completion",
-      requiredAxisHints: ["impression.energy", "color.saturation"],
-      requiredWeakBiasSources: ["spaceContext: livingRoom"],
-      requiredPatchPaths: ["impression.energy", "color.saturation"],
-      requiredSemanticHints: ["roomType", "impression"],
-    },
-  },
-  {
-    name: "low-information browse",
-    input: { text: "先给我看看" },
-    expectation: {
-      suggestedQaMode: "exploratory-intake",
-    },
-  },
-  {
-    name: "low-information undecided",
-    input: { text: "还没想好" },
-    expectation: {
-      suggestedQaMode: "exploratory-intake",
-    },
-  },
-  {
-    name: "low-information pretty",
-    input: { text: "想要好看一点" },
-    expectation: {
-      suggestedQaMode: "exploratory-intake",
+      requiredPrototypeMatches: ["visual-restraint"],
+      requiredKeptReadings: ["direct-pattern-not-too-floral"],
+      requiredSuppressedReadings: ["fallback:not-too-floral-color-restraint"],
+      requiredMergeRelations: ["reinforcement", "refinement"],
+      fallbackTriggered: true,
+      requiredSemanticGapTypes: ["unresolved-ambiguity"],
+      questionIntent: "resolve-ambiguity",
     },
   },
 ];

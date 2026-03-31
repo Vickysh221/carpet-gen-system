@@ -39,6 +39,9 @@ const FIELD_RULES: Record<HighValueField, DetectionRule[]> = {
     { pattern: "舒服", weight: 0.8 },
   ],
   colorMood: [
+    { pattern: "咖啡", weight: 1.3 },
+    { pattern: "咖啡感", weight: 1.3 },
+    { pattern: "咖色", weight: 1.2 },
     { pattern: "大地色", weight: 1.3 },
     { pattern: "颜色自然", weight: 1.1 },
     { pattern: "自然一点的颜色", weight: 1.2 },

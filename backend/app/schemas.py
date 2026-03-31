@@ -181,3 +181,24 @@ class ComposeFromReferenceResponse(BaseModel):
     prompt: str
     negative_prompt: str
     trace: PromptTrace
+
+
+class PrototypeRetrievalRequest(BaseModel):
+    text: str
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
+class PrototypeRetrievalEntryResponse(BaseModel):
+    entry_id: str
+    prototype_id: str
+    label: str
+    route_type: str
+    field: str
+    reading_ids: List[str]
+    similarity_score: float
+    explain_text: str
+
+
+class PrototypeRetrievalResponse(BaseModel):
+    total: int
+    items: List[PrototypeRetrievalEntryResponse]

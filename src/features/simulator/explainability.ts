@@ -75,6 +75,16 @@ export interface StateConstructionSummary {
   appliedDeltaSummaries: string[];
 }
 
+export interface PrototypeExplainabilitySummary {
+  mainSignals: string[];
+  expandedSignals: string[];
+  candidateSummaries: string[];
+  keptSummaries: string[];
+  suppressedSummaries: string[];
+  mergeSummaries: string[];
+  fallbackSummary: string;
+}
+
 export interface ConversationStateLogSummary {
   userText: string;
   turnCount: number;
@@ -82,6 +92,7 @@ export interface ConversationStateLogSummary {
   followUpQuestion: string;
   readyToGenerate: boolean;
   interpretation: InterpretationSummary;
+  prototypeExplainability: PrototypeExplainabilitySummary;
   stateConstruction: StateConstructionSummary;
   deltaExplanation: DeltaExplanationItem[];
 }
@@ -370,6 +381,65 @@ export function summarizeWeakBiasHints(weakBiasHints: WeakBiasHint[]) {
   }));
 }
 
+function summarizePrototypeExplainability(analysis: EntryAgentResult): PrototypeExplainabilitySummary {
+  const mainSignals =
+    analysis.interpretationMerge.prototypeMatches.length === 0
+      ? ["none"]
+      : analysis.interpretationMerge.prototypeMatches.map((match) => {
+          const aliasLabel = match.matchedAliases.length > 0 ? `alias ${match.matchedAliases.join(", ")}` : "alias none";
+          return `${match.label} · ${match.matchMode} · conf ${Math.round(match.confidence * 100)}% · ${aliasLabel}`;
+        });
+  const expandedSignals =
+    analysis.interpretationMerge.prototypeMatches.length === 0
+      ? ["none"]
+      : analysis.interpretationMerge.prototypeMatches.flatMap((match) => {
+          if (match.retrievalEvidence.length === 0) {
+            return [`${match.label} · retrieval none · route ${match.routeType}`];
+          }
+          return match.retrievalEvidence.map((item) => {
+            return `${match.label} · ${item.scoreLabel} · ${item.explainText}`;
+          });
+        });
+
+  const candidateSummaries =
+    analysis.interpretationMerge.candidateReadings.length === 0
+      ? ["none"]
+      : analysis.interpretationMerge.candidateReadings.map((candidate) => {
+          return `${candidate.label} · ${candidate.sourceType} · ${candidate.primarySlot} · conf ${Math.round(candidate.confidence * 100)}%`;
+        });
+
+  const keptSummaries =
+    analysis.interpretationMerge.keptReadings.length === 0
+      ? ["none"]
+      : analysis.interpretationMerge.keptReadings.map((item) => `${item.readingId} · ${item.reason}`);
+
+  const suppressedSummaries =
+    analysis.interpretationMerge.suppressedReadings.length === 0
+      ? ["none"]
+      : analysis.interpretationMerge.suppressedReadings.map((item) => `${item.readingId} · ${item.reason}`);
+
+  const mergeSummaries =
+    analysis.interpretationMerge.mergeGroups.length === 0
+      ? ["none"]
+      : analysis.interpretationMerge.mergeGroups.map((group) => {
+          return `${group.relation} · ${group.primarySlot} · ${group.decision}`;
+        });
+
+  const fallbackSummary = analysis.interpretationMerge.fallback.triggered
+    ? analysis.interpretationMerge.fallback.reasons.join(" / ")
+    : "not triggered";
+
+  return {
+    mainSignals,
+    expandedSignals,
+    candidateSummaries,
+    keptSummaries,
+    suppressedSummaries,
+    mergeSummaries,
+    fallbackSummary,
+  };
+}
+
 export function buildConversationStateLogSummary(input: {
   text: string;
   turnCount: number;
@@ -405,6 +475,7 @@ export function buildConversationStateLogSummary(input: {
       qaModeLabel: QA_MODE_LABELS[analysis.suggestedQaMode],
       followUpTargetLabel: getFieldLabel(analysis.suggestedFollowUpTarget),
     },
+    prototypeExplainability: summarizePrototypeExplainability(analysis),
     stateConstruction: {
       axisHintSummaries: topAxisHints,
       weakBiasSummaries: summarizeWeakBiasHints(analysis.weakBiasHints),

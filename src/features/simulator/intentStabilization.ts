@@ -116,6 +116,14 @@ function buildFollowUpQuestion(analysis: EntryAgentResult) {
   return getPrimaryAmbiguityQuestion(analysis) ?? getTargetedFollowUpQuestion(analysis.suggestedFollowUpTarget);
 }
 
+function getSemanticUnderstandingNarrative(analysis: EntryAgentResult) {
+  return analysis.semanticUnderstanding.narrative || buildOverallUnderstanding(analysis);
+}
+
+function getSemanticQuestionPrompt(analysis: EntryAgentResult) {
+  return analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
+}
+
 function hasCoreIntentAnchor(analysis: EntryAgentResult) {
   const hasImpression = analysis.updatedSlotStates.overallImpression === "tentative";
   const hasVisualAnchor =
@@ -138,7 +146,7 @@ function shouldGenerateNow(analysis: EntryAgentResult, turnCount: number) {
   return hasCoreIntentAnchor(analysis);
 }
 
-export function buildIntentStabilizationSnapshot({
+export async function buildIntentStabilizationSnapshot({
   previousText,
   nextReply,
   previousTurnCount = 0,
@@ -146,17 +154,17 @@ export function buildIntentStabilizationSnapshot({
   previousText?: string;
   nextReply: string;
   previousTurnCount?: number;
-}): IntentUnderstandingSnapshot {
+}): Promise<IntentUnderstandingSnapshot> {
   const text = joinUserTexts(previousText, nextReply);
   const turnCount = Math.min(previousTurnCount + 1, MAX_INTENT_TURNS);
-  const analysis = analyzeEntryText({ text });
+  const analysis = await analyzeEntryText({ text });
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
 
   return {
     text,
     analysis,
-    currentUnderstanding: buildOverallUnderstanding(analysis),
-    followUpQuestion: readyToGenerate ? "我已经有一个初步方向了，我们先进入第一轮看看。" : buildFollowUpQuestion(analysis),
+    currentUnderstanding: getSemanticUnderstandingNarrative(analysis),
+    followUpQuestion: readyToGenerate ? "我已经有一个初步方向了，我们先进入第一轮看看。" : getSemanticQuestionPrompt(analysis),
     readyToGenerate,
     turnCount,
     canAskAnotherQuestion: !readyToGenerate && turnCount < MAX_INTENT_TURNS,

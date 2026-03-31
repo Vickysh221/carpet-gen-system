@@ -203,6 +203,19 @@ function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary
           </div>
 
           <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Prototype explainability</div>
+            <div className="mt-2 space-y-2 text-sm leading-6">
+              <div><span className="font-medium text-stone-800">Main signals:</span> {summary.prototypeExplainability.mainSignals.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Expanded:</span> {summary.prototypeExplainability.expandedSignals.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Candidates:</span> {summary.prototypeExplainability.candidateSummaries.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Kept readings:</span> {summary.prototypeExplainability.keptSummaries.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Suppressed readings:</span> {summary.prototypeExplainability.suppressedSummaries.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Merge:</span> {summary.prototypeExplainability.mergeSummaries.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Fallback:</span> {summary.prototypeExplainability.fallbackSummary}</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
             <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">State construction</div>
             <div className="mt-2 space-y-3 text-sm leading-6">
               <div>
@@ -395,7 +408,7 @@ export function SimulatorPage() {
     setFeedbackMap((prev) => ({ ...prev, [variantId]: prev[variantId] === value ? undefined as never : value }));
   };
 
-  const handleContinueIntent = () => {
+  const handleContinueIntent = async () => {
     const trimmedText = entryText.trim();
 
     if (!trimmedText) {
@@ -404,7 +417,7 @@ export function SimulatorPage() {
       return;
     }
 
-    const nextSnapshot = buildIntentStabilizationSnapshot({
+    const nextSnapshot = await buildIntentStabilizationSnapshot({
       previousText: intentSnapshot?.text,
       nextReply: trimmedText,
       previousTurnCount: intentSnapshot?.turnCount ?? 0,

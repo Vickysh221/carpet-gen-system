@@ -1,10 +1,21 @@
-import type { EntryAgentBridgeResult, EntryAgentDetectionResult, HighValueField, QaMode, SlotStateStatus } from "./types";
+import type {
+  EntryAgentBridgeResult,
+  EntryAgentDetectionResult,
+  EntryAgentRecommendationResult,
+  HighValueField,
+  QaMode,
+  QuestionPlan,
+  SemanticGap,
+  SlotStateStatus,
+} from "./types";
 
 interface FollowUpRecommendationInput {
   detection: EntryAgentDetectionResult;
   bridge: EntryAgentBridgeResult;
   updatedSlotStates: Partial<Record<HighValueField, SlotStateStatus>>;
   previousSlotStates?: Partial<Record<HighValueField, SlotStateStatus>>;
+  semanticGaps?: SemanticGap[];
+  questionPlan?: QuestionPlan;
 }
 
 const FIELD_PRIORITY: HighValueField[] = [
@@ -66,12 +77,53 @@ function getQuestionIntent(target: HighValueField | undefined, state: SlotStateS
   return "fill-missing-slot";
 }
 
+function mapQuestionPlanToField(questionPlan: QuestionPlan | undefined, semanticGaps: SemanticGap[] | undefined) {
+  if (!questionPlan || !semanticGaps) {
+    return undefined;
+  }
+
+  return semanticGaps.find((gap) => gap.id === questionPlan.selectedQuestion.resolvesGapIds[0])?.targetField;
+}
+
+function mapQuestionPlanToQaMode(questionPlan: QuestionPlan | undefined) {
+  if (!questionPlan) {
+    return undefined;
+  }
+
+  if (questionPlan.selectedQuestion.questionIntent === "resolve-prototype-conflict") {
+    return "slot-revision" satisfies QaMode;
+  }
+
+  if (questionPlan.selectedQuestion.questionIntent === "resolve-ambiguity") {
+    return "exploratory-intake" satisfies QaMode;
+  }
+
+  return "slot-completion" satisfies QaMode;
+}
+
 export function deriveFollowUpRecommendation({
   detection,
   bridge,
   updatedSlotStates,
   previousSlotStates,
-}: FollowUpRecommendationInput) {
+  semanticGaps,
+  questionPlan,
+}: FollowUpRecommendationInput): EntryAgentRecommendationResult {
+  const semanticTargetField = mapQuestionPlanToField(questionPlan, semanticGaps);
+  const semanticQaMode = mapQuestionPlanToQaMode(questionPlan);
+
+  if (questionPlan && semanticQaMode) {
+    return {
+      updatedSlotStates,
+      suggestedQaMode: semanticQaMode,
+      suggestedFollowUpTarget: semanticTargetField,
+      suggestedQuestionIntent:
+        questionPlan.selectedQuestion.questionIntent === "fill-missing-slot"
+          ? "fill-missing-slot"
+          : questionPlan.selectedQuestion.questionIntent,
+    };
+  }
+
   const knownStateCount = countKnownStates(updatedSlotStates);
   const conflictedField = getConflictedField(updatedSlotStates);
   const weakField = getWeakField(updatedSlotStates);
@@ -107,6 +159,7 @@ export function deriveFollowUpRecommendation({
   }
 
   return {
+    updatedSlotStates,
     suggestedQaMode,
     suggestedFollowUpTarget,
     suggestedQuestionIntent: getQuestionIntent(
