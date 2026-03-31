@@ -1,3 +1,5 @@
+from typing import Optional, Union
+
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.core.model_config import RECOMMENDED_MODEL_CONFIG
@@ -77,8 +79,8 @@ def build_fuli_product_index() -> IndexBuildResponse:
 @router.post("/reference-library/fuli-products/search", response_model=SearchResponse)
 async def search_fuli_products(
     image: UploadFile = File(...),
-    client_id: str | None = Form(default=None),
-    session_id: str | None = Form(default=None),
+    client_id: Optional[str] = Form(default=None),
+    session_id: Optional[str] = Form(default=None),
     liked_ids: list[str] = Form(default=[]),
     disliked_ids: list[str] = Form(default=[]),
     top_k: int = Query(default=8, ge=1, le=20),
@@ -106,13 +108,16 @@ async def search_fuli_products(
 
 
 @router.post("/prototype-retrieval/index")
-def build_prototype_retrieval_index() -> dict[str, int | str]:
+def build_prototype_retrieval_index() -> dict[str, Union[int, str]]:
     return ensure_prototype_text_index()
 
 
 @router.post("/prototype-retrieval/search", response_model=PrototypeRetrievalResponse)
 def search_prototype_retrieval(payload: PrototypeRetrievalRequest) -> PrototypeRetrievalResponse:
-    matches = search_prototype_entries(query_text=payload.text, top_k=payload.top_k)
+    try:
+        matches = search_prototype_entries(query_text=payload.text, top_k=payload.top_k)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Prototype retrieval failed: {exc}") from exc
     return PrototypeRetrievalResponse(
         total=len(matches),
         items=[PrototypeRetrievalEntryResponse(**match.__dict__) for match in matches],
@@ -121,19 +126,22 @@ def search_prototype_retrieval(payload: PrototypeRetrievalRequest) -> PrototypeR
 
 @router.post("/llm-fallback/candidates", response_model=LlmFallbackResponse)
 def generate_llm_fallback_candidates(payload: LlmFallbackRequest) -> LlmFallbackResponse:
-    return request_llm_fallback_candidates(
-        text=payload.text,
-        hit_fields=payload.hit_fields,
-        prototype_labels=payload.prototype_labels,
-        trigger_reasons=payload.trigger_reasons,
-        top_k=payload.top_k,
-    )
+    try:
+        return request_llm_fallback_candidates(
+            text=payload.text,
+            hit_fields=payload.hit_fields,
+            prototype_labels=payload.prototype_labels,
+            trigger_reasons=payload.trigger_reasons,
+            top_k=payload.top_k,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"LLM fallback failed: {exc}") from exc
 
 
 @router.get("/preference/profile", response_model=PreferenceProfileResponse)
 def get_preference_profile(
-    client_id: str | None = Query(default=None),
-    session_id: str | None = Query(default=None),
+    client_id: Optional[str] = Query(default=None),
+    session_id: Optional[str] = Query(default=None),
 ) -> PreferenceProfileResponse:
     profile = load_preference_profile(client_id=client_id, session_id=session_id)
     resolved_client_id, items = load_preference_profile_items(client_id=client_id, session_id=session_id)
@@ -150,7 +158,7 @@ def get_preference_profile(
 
 
 @router.post("/preference/profile/clear")
-def clear_profile(payload: PreferenceProfileActionRequest) -> dict[str, str | bool]:
+def clear_profile(payload: PreferenceProfileActionRequest) -> dict[str, Union[str, bool]]:
     resolved_client_id = clear_preference_profile(client_id=payload.client_id, session_id=payload.session_id)
     if not resolved_client_id:
         raise HTTPException(status_code=404, detail="Preference profile not found.")
@@ -177,7 +185,7 @@ def undo_profile_event(payload: PreferenceProfileActionRequest) -> PreferenceUnd
 
 
 @router.post("/preference/profile/lock")
-def lock_profile_anchor(payload: PreferenceAnchorLockRequest) -> dict[str, str | bool]:
+def lock_profile_anchor(payload: PreferenceAnchorLockRequest) -> dict[str, Union[str, bool]]:
     resolved_client_id = set_anchor_lock(
         client_id=payload.client_id,
         session_id=payload.session_id,
@@ -189,7 +197,7 @@ def lock_profile_anchor(payload: PreferenceAnchorLockRequest) -> dict[str, str |
 
 
 @router.post("/preference/profile/unlock")
-def unlock_profile_anchor(payload: PreferenceAnchorLockRequest) -> dict[str, str | bool]:
+def unlock_profile_anchor(payload: PreferenceAnchorLockRequest) -> dict[str, Union[str, bool]]:
     resolved_client_id = remove_anchor_lock(
         client_id=payload.client_id,
         session_id=payload.session_id,

@@ -76,6 +76,7 @@ export function mergeInterpretationCandidates(input: {
     return sourceRank[right.sourceType] - sourceRank[left.sourceType];
   });
 
+  const hasNonFallbackCandidate = sorted.some((c) => c.sourceType !== "fallback-candidate");
   const primary = sorted[0];
   const keptIds = new Set<string>([primary.id]);
   finalResolvedReadings.push(primary);
@@ -85,7 +86,11 @@ export function mergeInterpretationCandidates(input: {
       primary.id,
       "kept",
       prototypeCandidates.length > 0 && directCandidates.length === 0 ? "reinforcement" : "refinement",
-      primary.sourceType === "prototype" ? "prototype reading 成为当前主解释。" : "direct reading 成为当前主解释。",
+      primary.sourceType === "fallback-candidate"
+        ? "无 direct/prototype 候选，LLM fallback 成为唯一主解释。"
+        : primary.sourceType === "prototype"
+          ? "prototype reading 成为当前主解释。"
+          : "direct reading 成为当前主解释。",
     ),
   );
 
@@ -95,7 +100,7 @@ export function mergeInterpretationCandidates(input: {
     const sameDirection = candidate.polarity === primary.polarity;
     const shouldKeepAsSecondary = relation === "refinement" && candidate.confidence >= 0.45 && !keptIds.has(candidate.id);
     const shouldSuppress =
-      candidate.sourceType === "fallback-candidate" ||
+      (candidate.sourceType === "fallback-candidate" && hasNonFallbackCandidate) ||
       relation === "conflict" ||
       (sameSlot && !sameDirection) ||
       (sameSlot && candidate.strength < primary.strength);

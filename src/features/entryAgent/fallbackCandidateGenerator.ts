@@ -1,4 +1,4 @@
-import { backendLlmFallbackProvider, type LlmFallbackProvider } from "./llmFallbackAdapter";
+import { activeLlmFallbackProvider, type LlmFallbackProvider } from "./llmFallbackAdapter";
 import type {
   EntryAgentDetectionResult,
   EntryAgentInput,
@@ -105,6 +105,15 @@ function shouldTriggerLlmFallback(input: {
   const normalized = normalizeText(input.text);
   const topPrototypeConfidence = input.prototypeMatches.length > 0 ? Math.max(...input.prototypeMatches.map((item) => item.confidence)) : 0;
 
+  if (normalized.length < 2) {
+    return {
+      triggered: false,
+      reasons,
+    };
+  }
+
+  reasons.push("默认让 Ollama 参与候选分析，补充语义理解与长尾表达覆盖。");
+
   if (normalized.length >= 4 && input.directCandidates.length === 0 && input.prototypeCandidates.length === 0) {
     reasons.push("输入有语义内容，但 direct / prototype 解释层均未产出候选。");
   }
@@ -120,7 +129,7 @@ function shouldTriggerLlmFallback(input: {
   }
 
   return {
-    triggered: reasons.length > 0,
+    triggered: true,
     reasons,
   };
 }
@@ -132,7 +141,7 @@ export async function buildFallbackCandidateSet(
     prototypeMatches: PrototypeMatch[];
     prototypeCandidates: InterpretationCandidate[];
   },
-  provider: LlmFallbackProvider = backendLlmFallbackProvider,
+  provider: LlmFallbackProvider = activeLlmFallbackProvider,
 ): Promise<FallbackCandidateSet> {
   const text = normalizeText(input.text);
   const reasons: string[] = [];
@@ -174,16 +183,36 @@ export async function buildFallbackCandidateSet(
   });
 
   if (weakCoverage.triggered) {
-    const response = await provider.generate({
-      text: input.text,
-      hitFields: input.detection.hitFields,
-      prototypeLabels: input.prototypeMatches.map((item) => item.label),
-      triggerReasons: weakCoverage.reasons,
-      topK: 2,
-    });
+    let response;
+
+    try {
+      response = await provider.generate({
+        text: input.text,
+        hitFields: input.detection.hitFields,
+        prototypeLabels: input.prototypeMatches.map((item) => item.label),
+        triggerReasons: weakCoverage.reasons,
+        topK: 2,
+      });
+    } catch (error) {
+      console.warn("LLM fallback provider threw unexpectedly, degrading to rules-only analysis.", error);
+      response = {
+        available: false,
+        degraded: true,
+        provider: "ollama-direct",
+        triggerReasons: weakCoverage.reasons,
+        errorMessage: error instanceof Error ? error.message : "LLM fallback provider crashed unexpectedly.",
+        items: [],
+      };
+    }
+
+    reasons.push(...weakCoverage.reasons);
+    if (response.degraded) {
+      reasons.push(response.errorMessage ? `Ollama 已降级：${response.errorMessage}` : "Ollama 不可用或超时，已自动降级回主链结果。");
+    } else if (response.available) {
+      reasons.push(`Ollama 候选分析已参与当前轮语义解释。provider=${response.provider ?? "unknown"}`);
+    }
 
     if (response.items.length > 0) {
-      reasons.push(...weakCoverage.reasons);
       response.items.forEach((item, index) => {
         const candidate = mapLlmCandidateToInterpretationCandidate({
           item,
@@ -200,6 +229,17 @@ export async function buildFallbackCandidateSet(
   return {
     triggered: reasons.length > 0,
     reasons,
+    provider: weakCoverage.triggered ? responseProviderFromReasons(reasons) : "rules-only",
+    available: weakCoverage.triggered ? !reasons.some((item) => item.includes("已降级")) : false,
+    degraded: weakCoverage.triggered ? reasons.some((item) => item.includes("已降级")) : false,
+    errorMessage: reasons.find((item) => item.startsWith("Ollama 已降级："))?.replace("Ollama 已降级：", ""),
     candidates,
   };
+}
+
+function responseProviderFromReasons(reasons: string[]) {
+  if (reasons.some((item) => item.includes("provider=backend"))) return "backend" as const;
+  if (reasons.some((item) => item.includes("provider=ollama-direct"))) return "ollama-direct" as const;
+  if (reasons.some((item) => item.includes("Ollama"))) return "ollama-direct" as const;
+  return "rules-only" as const;
 }

@@ -17,6 +17,10 @@ interface EntryAgentFixtureExpectation {
   fallbackTriggered?: boolean;
   requiredSemanticGapTypes?: SemanticGapType[];
   questionIntent?: string;
+  selectedTargetField?: HighValueField;
+  selectedTargetSlot?: string;
+  requiredTargetAxes?: string[];
+  questionPromptIncludes?: string[];
 }
 
 export interface EntryAgentFixture {
@@ -42,6 +46,10 @@ export const ENTRY_AGENT_FIXTURES: EntryAgentFixture[] = [
       fallbackTriggered: false,
       requiredSemanticGapTypes: ["missing-slot"],
       questionIntent: "fill-missing-slot",
+      selectedTargetField: "colorMood",
+      selectedTargetSlot: "color",
+      requiredTargetAxes: ["color.warmth", "color.saturation"],
+      questionPromptIncludes: ["颜色", "偏暖", "别太跳"],
     },
   },
   {
@@ -61,6 +69,10 @@ export const ENTRY_AGENT_FIXTURES: EntryAgentFixture[] = [
       fallbackTriggered: false,
       requiredSemanticGapTypes: ["missing-slot"],
       questionIntent: "fill-missing-slot",
+      selectedTargetField: "patternTendency",
+      selectedTargetSlot: "motif",
+      requiredTargetAxes: ["motif.geometry", "motif.organic"],
+      questionPromptIncludes: ["自然一点", "几何", "自然生长"],
     },
   },
   {
@@ -81,6 +93,10 @@ export const ENTRY_AGENT_FIXTURES: EntryAgentFixture[] = [
       fallbackTriggered: true,
       requiredSemanticGapTypes: ["unresolved-ambiguity"],
       questionIntent: "resolve-ambiguity",
+      selectedTargetField: "patternTendency",
+      selectedTargetSlot: "motif",
+      requiredTargetAxes: ["motif.complexity", "motif.geometry"],
+      questionPromptIncludes: ["图案太碎太花", "太几何"],
     },
   },
 ];

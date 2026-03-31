@@ -81,6 +81,20 @@ export async function buildEntryAgentSpecCases() {
         questionPlanMatch:
           fixture.expectation.questionIntent === undefined ||
           result.questionPlan?.selectedQuestion.questionIntent === fixture.expectation.questionIntent,
+        selectedTargetFieldMatch:
+          fixture.expectation.selectedTargetField === undefined ||
+          result.questionPlan?.selectedTargetField === fixture.expectation.selectedTargetField,
+        selectedTargetSlotMatch:
+          fixture.expectation.selectedTargetSlot === undefined ||
+          result.questionPlan?.selectedTargetSlot === fixture.expectation.selectedTargetSlot,
+        targetAxesMatch:
+          fixture.expectation.requiredTargetAxes === undefined ||
+          fixture.expectation.requiredTargetAxes.every((axis) => result.questionPlan?.selectedTargetAxes.includes(axis as never)),
+        questionPromptTextMatch:
+          fixture.expectation.questionPromptIncludes === undefined ||
+          fixture.expectation.questionPromptIncludes.every((needle) =>
+            result.questionPlan?.selectedQuestion.prompt.includes(needle),
+          ),
       },
     };
   }));

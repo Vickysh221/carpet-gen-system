@@ -1,4 +1,12 @@
-import type { EntryAgentBridgeResult, EntryAgentResult, InterpretationCandidate, SemanticDirection, SemanticUnderstanding } from "./types";
+import type {
+  EntryAgentBridgeResult,
+  EntryAgentResult,
+  InterpretationCandidate,
+  QuestionPlan,
+  SemanticDirection,
+  SemanticGap,
+  SemanticUnderstanding,
+} from "./types";
 
 function buildDirectionLabel(reading: InterpretationCandidate) {
   if (reading.semanticHints?.patternComplexity === "lower") {
@@ -58,6 +66,8 @@ function buildNarrative(input: {
   secondaryReadings: SemanticUnderstanding["secondaryReadings"];
   openQuestions: string[];
   conflictSummary: string[];
+  primaryGap?: SemanticGap;
+  questionPlan?: QuestionPlan;
 }) {
   const parts: string[] = [];
 
@@ -79,12 +89,20 @@ function buildNarrative(input: {
     parts.push(`还没完全确认的是${input.openQuestions[0]}。`);
   }
 
+  if (input.primaryGap?.targetSlot && input.questionPlan?.selectedQuestion.expectedInformationGain) {
+    parts.push(`下一句会继续把这块信息收清楚，重点是${input.questionPlan.selectedQuestion.expectedInformationGain}`);
+  } else if (input.primaryGap?.targetSlot) {
+    parts.push("下一句会继续把当前最关键的一块信息收清楚。");
+  }
+
   return parts.join("");
 }
 
 export function buildSemanticUnderstanding(input: {
   interpretationMerge: EntryAgentResult["interpretationMerge"];
   bridge: Pick<EntryAgentBridgeResult, "ambiguities">;
+  semanticGaps: SemanticGap[];
+  questionPlan?: QuestionPlan;
 }): SemanticUnderstanding {
   const finalReadings = input.interpretationMerge.finalResolvedReadings;
   const activeReadings = finalReadings.map((reading) => ({
@@ -117,6 +135,9 @@ export function buildSemanticUnderstanding(input: {
     ...conflictSummary,
   ].slice(0, 3);
   const confirmedDirections = collectConfirmedDirections(finalReadings);
+  const primaryGap = input.questionPlan
+    ? input.semanticGaps.find((item) => item.id === input.questionPlan?.selectedGapId)
+    : input.semanticGaps[0];
 
   const isWeakNarrative = confirmedDirections.length === 0 && activeReadings.length === 0;
 
@@ -133,6 +154,8 @@ export function buildSemanticUnderstanding(input: {
       secondaryReadings,
       openQuestions,
       conflictSummary,
+      primaryGap,
+      questionPlan: input.questionPlan,
     }),
   };
 }

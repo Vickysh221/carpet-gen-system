@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
+from typing import Any
 
 import faiss
 import numpy as np
-import torch
-from transformers import AutoModel, AutoTokenizer
 
 from app.core.settings import (
     PROTOTYPE_TEXT_EMBEDDINGS_FILE,
@@ -90,15 +90,19 @@ PROTOTYPE_ENTRY_SOURCE: list[PrototypeRetrievalEntry] = [
     ),
 ]
 
-_TOKENIZER: AutoTokenizer | None = None
-_MODEL: AutoModel | None = None
+_TOKENIZER: Any | None = None
+_MODEL: Any | None = None
 _ENTRIES: list[PrototypeRetrievalEntry] | None = None
 _EMBEDDINGS: np.ndarray | None = None
 _INDEX: faiss.Index | None = None
 
 
-def _load_model() -> tuple[AutoTokenizer, AutoModel]:
+def _load_model() -> tuple[Any, Any]:
     global _TOKENIZER, _MODEL
+    # Xet-backed downloads can hang in this environment; force standard HTTP downloads.
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    from transformers import AutoModel, AutoTokenizer
+
     if _TOKENIZER is None:
         _TOKENIZER = AutoTokenizer.from_pretrained(PROTOTYPE_TEXT_MODEL_NAME)
     if _MODEL is None:
@@ -107,7 +111,9 @@ def _load_model() -> tuple[AutoTokenizer, AutoModel]:
     return _TOKENIZER, _MODEL
 
 
-def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+def _mean_pool(last_hidden_state: Any, attention_mask: Any) -> Any:
+    import torch
+
     mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
     masked = last_hidden_state * mask
     summed = masked.sum(dim=1)
@@ -118,6 +124,8 @@ def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) ->
 def compute_text_embeddings(texts: list[str]) -> np.ndarray:
     if not texts:
         return np.empty((0, 384), dtype=np.float32)
+
+    import torch
 
     tokenizer, model = _load_model()
     with torch.no_grad():

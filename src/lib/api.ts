@@ -208,6 +208,8 @@ export type LlmFallbackResponse = {
   degraded: boolean;
   triggerReasons: string[];
   items: LlmFallbackCandidate[];
+  provider?: "ollama-direct" | "backend";
+  errorMessage?: string;
 };
 
 function mapAxis(axis: ApiInternalAxis): InternalAxis {
@@ -364,6 +366,7 @@ export async function fetchLlmFallbackCandidates(payload: {
     available: response.available,
     degraded: response.degraded,
     triggerReasons: response.trigger_reasons,
+    provider: "backend",
     items: response.items.map((item) => ({
       candidatePrototypes: item.candidate_prototypes,
       candidateFields: item.candidate_fields,

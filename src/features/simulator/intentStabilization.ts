@@ -32,6 +32,8 @@ function buildOverallUnderstanding(analysis: EntryAgentResult) {
       phrases.push("我先理解成你想要一种偏温暖、带陪伴感的氛围。");
     } else if (analysis.provisionalStateHints.impression === "soft") {
       phrases.push("目前看起来你更靠近柔和、放松的一边。");
+    } else {
+      phrases.push("我抓到了整体氛围方向，但还没有形成稳定的具体理解，需要再确认一下。");
     }
   }
 
@@ -40,6 +42,8 @@ function buildOverallUnderstanding(analysis: EntryAgentResult) {
       phrases.push("同时你似乎也不希望图案太花或太碎，想先把视觉收一收。");
     } else if (analysis.provisionalStateHints.patternGeometry === "lessGeometric") {
       phrases.push("我也感觉你在回避太硬、太几何的图案方向。");
+    } else if (phrases.length === 0) {
+      phrases.push("我注意到你对图案有一些倾向，但具体方向还不太明确。");
     }
   }
 
@@ -48,11 +52,21 @@ function buildOverallUnderstanding(analysis: EntryAgentResult) {
       phrases.push("我先理解成你想让颜色更自然、更温和一点。");
     } else if (analysis.provisionalStateHints.colorMood === "restrained") {
       phrases.push("目前看起来你更希望颜色先收敛一点，不要太跳。");
+    } else {
+      phrases.push("我先感觉你对颜色有一些想法，但还需要再确认一下方向。");
     }
+  }
+
+  if (phrases.length === 0 && analysis.hitFields.includes("arrangementTendency")) {
+    phrases.push("我先抓到了你对排布方式有一些倾向，但还没完全确认方向。");
   }
 
   if (phrases.length === 0 && analysis.hitFields.includes("spaceContext")) {
     phrases.push("我先抓到的是这块地毯会服务于一个具体空间，但方向还需要再收一收。");
+  }
+
+  if (phrases.length === 0 && analysis.hitFields.length > 0) {
+    phrases.push("我先捕捉到了一些初步方向，还需要继续确认。");
   }
 
   if (phrases.length === 0) {
@@ -127,6 +141,21 @@ function getSemanticQuestionPrompt(analysis: EntryAgentResult) {
   return analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
 }
 
+function getNonRepeatingSemanticQuestionPrompt(input: {
+  analysis: EntryAgentResult;
+  previousQuestion?: string;
+}) {
+  const defaultPrompt = getSemanticQuestionPrompt(input.analysis);
+  const previousQuestion = input.previousQuestion?.trim();
+
+  if (!previousQuestion || previousQuestion !== defaultPrompt) {
+    return defaultPrompt;
+  }
+
+  const alternative = input.analysis.questionCandidates.find((candidate) => candidate.prompt !== previousQuestion);
+  return alternative?.prompt ?? defaultPrompt;
+}
+
 function hasCoreIntentAnchor(analysis: EntryAgentResult) {
   const hasImpression = analysis.updatedSlotStates.overallImpression === "tentative";
   const hasVisualAnchor =
@@ -151,10 +180,12 @@ function shouldGenerateNow(analysis: EntryAgentResult, turnCount: number) {
 
 export async function buildIntentStabilizationSnapshot({
   previousText,
+  previousQuestion,
   nextReply,
   previousTurnCount = 0,
 }: {
   previousText?: string;
+  previousQuestion?: string;
   nextReply: string;
   previousTurnCount?: number;
 }): Promise<IntentUnderstandingSnapshot> {
@@ -167,7 +198,12 @@ export async function buildIntentStabilizationSnapshot({
     text,
     analysis,
     currentUnderstanding: getSemanticUnderstandingNarrative(analysis),
-    followUpQuestion: readyToGenerate ? "我已经有一个初步方向了，我们先进入第一轮看看。" : getSemanticQuestionPrompt(analysis),
+    followUpQuestion: readyToGenerate
+      ? "我已经有一个初步方向了，我们先进入第一轮看看。"
+      : getNonRepeatingSemanticQuestionPrompt({
+          analysis,
+          previousQuestion,
+        }),
     readyToGenerate,
     turnCount,
     canAskAnotherQuestion: !readyToGenerate && turnCount < MAX_INTENT_TURNS,

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import socket
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from app.core.settings import OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS
 from app.schemas import LlmFallbackCandidatePayload, LlmFallbackResponse
@@ -43,16 +44,16 @@ def _build_prompt(text: str, hit_fields: list[str], prototype_labels: list[str],
 已匹配的 prototype 标签：{prototype_labels}
 触发 fallback 的原因：{trigger_reasons}
 
-返回如下 JSON 格式（不要多余文字）：
+返回如下 JSON 格式（不要多余文字），例如：
 {{
   "items": [
     {{
-      "candidate_prototypes": ["概念或原型标签，用中文"],
-      "candidate_fields": ["对应一个或多个允许的 field"],
+      "candidate_prototypes": ["安静日常感"],
+      "candidate_fields": ["overallImpression"],
       "candidate_axis_hints": {{
-        "impression": {{"calm": 0.75}}
+        "impression": {{"calm": 0.76, "softness": 0.65}}
       }},
-      "ambiguity_notes": ["简短的歧义说明，用中文"],
+      "ambiguity_notes": ["偏安静方向，但色彩层面仍待确认"],
       "needs_follow_up": true
     }}
   ]
@@ -112,6 +113,34 @@ def _normalize_item(raw: Any) -> LlmFallbackCandidatePayload | None:
     )
 
 
+def _load_json_response(request: Request) -> dict[str, Any]:
+    opener = build_opener(ProxyHandler({}))
+    with opener.open(request, timeout=OLLAMA_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _fetch_installed_models() -> list[str]:
+    request = Request(
+        url=f"{OLLAMA_BASE_URL}/api/tags",
+        headers={"Content-Type": "application/json"},
+        method="GET",
+    )
+    raw = _load_json_response(request)
+    return [
+        str(model.get("name"))
+        for model in raw.get("models", [])
+        if isinstance(model, dict) and isinstance(model.get("name"), str)
+    ]
+
+
+def _resolve_request_model(installed_models: list[str]) -> str | None:
+    if not installed_models:
+        return None
+    if OLLAMA_MODEL in installed_models:
+        return OLLAMA_MODEL
+    return installed_models[0]
+
+
 def request_llm_fallback_candidates(
     *,
     text: str,
@@ -120,8 +149,19 @@ def request_llm_fallback_candidates(
     trigger_reasons: list[str],
     top_k: int = 2,
 ) -> LlmFallbackResponse:
+    try:
+        installed_models = _fetch_installed_models()
+        request_model = _resolve_request_model(installed_models)
+    except (TimeoutError, socket.timeout, HTTPError, URLError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f"Failed to query Ollama at {OLLAMA_BASE_URL}: {exc}") from exc
+
+    if not request_model:
+        raise RuntimeError(
+            f"Ollama is reachable at {OLLAMA_BASE_URL}, but no installed models were found."
+        )
+
     payload = {
-        "model": OLLAMA_MODEL,
+        "model": request_model,
         "prompt": _build_prompt(text, hit_fields, prototype_labels, trigger_reasons, top_k),
         "stream": False,
         "format": "json",
@@ -137,25 +177,19 @@ def request_llm_fallback_candidates(
     )
 
     try:
-        with urlopen(request, timeout=OLLAMA_TIMEOUT_SECONDS) as response:
-            raw = json.loads(response.read().decode("utf-8"))
-            raw_text = raw.get("response", "{}")
-            parsed = json.loads(raw_text)
-            items = [
-                item
-                for item in (_normalize_item(candidate) for candidate in parsed.get("items", []))
-                if item is not None
-            ]
-            return LlmFallbackResponse(
-                available=True,
-                degraded=False,
-                trigger_reasons=trigger_reasons,
-                items=items,
-            )
-    except (TimeoutError, HTTPError, URLError, json.JSONDecodeError, ValueError):
+        raw = _load_json_response(request)
+        raw_text = raw.get("response", "{}")
+        parsed = json.loads(raw_text)
+        items = [
+            item
+            for item in (_normalize_item(candidate) for candidate in parsed.get("items", []))
+            if item is not None
+        ]
         return LlmFallbackResponse(
-            available=False,
-            degraded=True,
+            available=True,
+            degraded=False,
             trigger_reasons=trigger_reasons,
-            items=[],
+            items=items,
         )
+    except (TimeoutError, socket.timeout, HTTPError, URLError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f"Ollama generate request failed for model '{request_model}': {exc}") from exc

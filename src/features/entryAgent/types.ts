@@ -24,6 +24,15 @@ export type QuestionTargetType = "conflict" | "ambiguity" | "slot";
 
 export type QuestionIntent = "resolve-prototype-conflict" | "resolve-ambiguity" | "fill-missing-slot";
 
+export type SlotQuestionMode =
+  | "contrast-calm-vs-presence"
+  | "contrast-soft-vs-crisp"
+  | "contrast-warm-vs-muted"
+  | "contrast-complexity-vs-geometry"
+  | "contrast-geometry-vs-organic"
+  | "contrast-open-vs-ordered"
+  | "anchor-space-context";
+
 export type EntryAgentSlotKey = "color" | "motif" | "arrangement" | "impression";
 
 export type EntryAgentAxisMap = {
@@ -32,6 +41,10 @@ export type EntryAgentAxisMap = {
   arrangement: "order" | "spacing";
   impression: "calm" | "energy" | "softness";
 };
+
+export type EntryAgentAxisPath = {
+  [Slot in EntryAgentSlotKey]: `${Slot}.${EntryAgentAxisMap[Slot]}`;
+}[EntryAgentSlotKey];
 
 export type EntryAgentAxisHints = {
   [Slot in EntryAgentSlotKey]?: Partial<Record<EntryAgentAxisMap[Slot], number>>;
@@ -122,6 +135,10 @@ export interface MergeDecisionGroup {
 export interface FallbackCandidateSet {
   triggered: boolean;
   reasons: string[];
+  provider: "ollama-direct" | "backend" | "rules-only";
+  available: boolean;
+  degraded: boolean;
+  errorMessage?: string;
   candidates: InterpretationCandidate[];
 }
 
@@ -201,26 +218,38 @@ export interface SemanticGap {
   priority: number;
   targetField?: HighValueField;
   targetSlot?: EntryAgentSlotKey;
+  targetAxes: EntryAgentAxisPath[];
+  questionMode?: SlotQuestionMode;
   relatedReadingIds: string[];
   reason: string;
   evidence: string[];
   expectedGain: string;
+  rankingReason: string;
 }
 
 export interface NextQuestionCandidate {
   id: string;
   targetType: QuestionTargetType;
   targetRef: string;
+  targetField?: HighValueField;
+  targetSlot?: EntryAgentSlotKey;
+  targetAxes: EntryAgentAxisPath[];
+  questionMode?: SlotQuestionMode;
   questionIntent: QuestionIntent;
   prompt: string;
   priority: number;
   resolvesGapIds: string[];
   expectedInformationGain: string;
+  questionWhy: string;
 }
 
 export interface QuestionPlan {
+  selectedGapId: string;
   primaryTargetType: QuestionTargetType;
   primaryTargetRef: string;
+  selectedTargetField?: HighValueField;
+  selectedTargetSlot?: EntryAgentSlotKey;
+  selectedTargetAxes: EntryAgentAxisPath[];
   selectedQuestion: NextQuestionCandidate;
   whyThisQuestion: string;
   blockedBy: string[];

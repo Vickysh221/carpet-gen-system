@@ -34,10 +34,6 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     bridge,
     previousSlotStates: input.slotStates,
   });
-  const semanticUnderstanding = buildSemanticUnderstanding({
-    interpretationMerge,
-    bridge,
-  });
   const semanticGaps = buildSemanticGaps({
     interpretationMerge,
     bridge,
@@ -45,6 +41,12 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
   });
   const { questionCandidates, questionPlan } = buildQuestionPlan({
     semanticGaps,
+  });
+  const semanticUnderstanding = buildSemanticUnderstanding({
+    interpretationMerge,
+    bridge,
+    semanticGaps,
+    questionPlan,
   });
   const recommendation = deriveFollowUpRecommendation({
     detection,

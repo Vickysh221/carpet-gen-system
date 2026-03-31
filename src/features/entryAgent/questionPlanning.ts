@@ -1,34 +1,30 @@
+import { getSlotQuestionSpec } from "./slotQuestionSpec";
 import type { NextQuestionCandidate, QuestionPlan, SemanticGap } from "./types";
 
 function buildPromptForGap(gap: SemanticGap) {
   if (gap.type === "prototype-conflict") {
+    const spec = getSlotQuestionSpec(gap.targetField);
+    const modeSpec = spec?.modes.find((item) => item.mode === gap.questionMode) ?? spec?.modes[0];
+    if (modeSpec) {
+      return `${gap.reason} ${modeSpec.buildPrompt({ reason: gap.reason })}`;
+    }
     return `我现在卡在一个主解释冲突上。${gap.reason} 你更希望我先按哪一边理解？`;
   }
 
   if (gap.type === "unresolved-ambiguity") {
+    const spec = getSlotQuestionSpec(gap.targetField);
+    const modeSpec = spec?.modes.find((item) => item.mode === gap.questionMode) ?? spec?.modes[0];
+    if (modeSpec) {
+      return `${gap.reason} ${modeSpec.buildPrompt({ reason: gap.reason })}`;
+    }
     return `${gap.reason} 你更想先确认哪一种理解？`;
   }
 
-  if (gap.targetField === "overallImpression") {
-    return "如果先只确认一个方向，你更想让它整体偏安静柔和，还是更有一点存在感？";
+  const spec = getSlotQuestionSpec(gap.targetField);
+  const modeSpec = spec?.modes.find((item) => item.mode === gap.questionMode) ?? spec?.modes[0];
+  if (modeSpec) {
+    return modeSpec.buildPrompt({ reason: gap.reason });
   }
-
-  if (gap.targetField === "patternTendency") {
-    return "如果先补图案方向，你更在意图案别太碎，还是先别太几何？";
-  }
-
-  if (gap.targetField === "colorMood") {
-    return "如果先补颜色方向，你更想确认偏暖偏自然，还是先把颜色收得更克制？";
-  }
-
-  if (gap.targetField === "arrangementTendency") {
-    return "如果先补排布方向，你更希望整体更松、更有呼吸感，还是更整齐有秩序？";
-  }
-
-  if (gap.targetField === "spaceContext") {
-    return "这块地毯现在主要还是想服务哪个空间场景？";
-  }
-
   return "如果先只确认一个最关键的缺口，你希望我先补氛围、颜色，还是图案方向？";
 }
 
@@ -45,11 +41,16 @@ function buildCandidate(gap: SemanticGap): NextQuestionCandidate {
     id: `question:${gap.id}`,
     targetType,
     targetRef: gap.id,
+    targetField: gap.targetField,
+    targetSlot: gap.targetSlot,
+    targetAxes: gap.targetAxes,
+    questionMode: gap.questionMode,
     questionIntent,
     prompt: buildPromptForGap(gap),
     priority: gap.priority,
     resolvesGapIds: [gap.id],
     expectedInformationGain: gap.expectedGain,
+    questionWhy: gap.rankingReason,
   };
 }
 
@@ -70,10 +71,14 @@ export function buildQuestionPlan(input: { semanticGaps: SemanticGap[] }): {
   return {
     questionCandidates,
     questionPlan: {
+      selectedGapId: selectedQuestion.resolvesGapIds[0],
       primaryTargetType: selectedQuestion.targetType,
       primaryTargetRef: selectedQuestion.targetRef,
+      selectedTargetField: selectedQuestion.targetField,
+      selectedTargetSlot: selectedQuestion.targetSlot,
+      selectedTargetAxes: selectedQuestion.targetAxes,
       selectedQuestion,
-      whyThisQuestion: selectedQuestion.expectedInformationGain,
+      whyThisQuestion: `${selectedQuestion.questionWhy} ${selectedQuestion.expectedInformationGain}`.trim(),
       blockedBy: [],
       deferredTargets: questionCandidates.slice(1).map((item) => item.targetRef),
     },

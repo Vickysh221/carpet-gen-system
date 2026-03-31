@@ -69,6 +69,18 @@ export interface InterpretationSummary {
   followUpTargetLabel: string;
 }
 
+export interface QuestionPlanningSummary {
+  llmStatus: string;
+  llmSummary: string;
+  selectedGapType: string;
+  targetFieldLabel: string;
+  targetSlotLabel: string;
+  targetAxesSummary: string;
+  questionModeLabel: string;
+  expectedInformationGain: string;
+  whyThisQuestion: string;
+}
+
 export interface StateConstructionSummary {
   axisHintSummaries: string[];
   weakBiasSummaries: WeakBiasSummaryItem[];
@@ -92,6 +104,7 @@ export interface ConversationStateLogSummary {
   followUpQuestion: string;
   readyToGenerate: boolean;
   interpretation: InterpretationSummary;
+  questionPlanning: QuestionPlanningSummary;
   prototypeExplainability: PrototypeExplainabilitySummary;
   stateConstruction: StateConstructionSummary;
   deltaExplanation: DeltaExplanationItem[];
@@ -252,6 +265,52 @@ function getAxisGloss(path: ExplainabilityAxisPath) {
 
 function getFieldLabel(field: HighValueField | undefined) {
   return field ? FIELD_LABELS[field] : "none";
+}
+
+function getSlotLabel(slot: string | undefined) {
+  if (slot === "color") return "color";
+  if (slot === "motif") return "motif";
+  if (slot === "arrangement") return "arrangement";
+  if (slot === "impression") return "impression";
+  return "none";
+}
+
+function getQuestionModeLabel(mode: string | undefined) {
+  return mode ?? "none";
+}
+
+function summarizeLlmFallbackStatus(analysis: EntryAgentResult) {
+  const fallback = analysis.interpretationMerge.fallback;
+  const reasons = fallback.reasons;
+  const degraded = fallback.degraded;
+  const active = fallback.available;
+  const attempted = fallback.triggered;
+
+  if (degraded) {
+    return {
+      llmStatus: `${fallback.provider} degraded`,
+      llmSummary: fallback.errorMessage ?? reasons.filter((item) => item.includes("Ollama") || item.includes("降级")).join(" / "),
+    };
+  }
+
+  if (active) {
+    return {
+      llmStatus: `${fallback.provider} active`,
+      llmSummary: reasons.filter((item) => item.includes("Ollama")).join(" / "),
+    };
+  }
+
+  if (attempted) {
+    return {
+      llmStatus: `${fallback.provider} attempted`,
+      llmSummary: reasons.join(" / "),
+    };
+  }
+
+  return {
+    llmStatus: "rules/retrieval only",
+    llmSummary: "No local-model fallback was needed for this turn.",
+  };
 }
 
 function pickTopAxisValues(axisValues: ExplainabilityAxisValue[], limit: number) {
@@ -447,10 +506,10 @@ export function buildConversationStateLogSummary(input: {
   followUpQuestion: string;
   readyToGenerate: boolean;
   analysis: EntryAgentResult;
-  initialization: InitializationExplainabilityResult;
+  initialization?: InitializationExplainabilityResult;
 }) {
   const { analysis, initialization } = input;
-  const deltaExplanation = explainInitializationDeltas(initialization.appliedDeltaList);
+  const deltaExplanation = initialization ? explainInitializationDeltas(initialization.appliedDeltaList) : [];
   const topAxisHints = pickTopAxisValues(flattenAxisHints(analysis), 4).map((item) => {
     const gloss = getAxisGloss(item.path);
     return `${gloss.shortLabel} ${formatPercent(item.value)} · ${describeAxisValue(item.path, item.value)}`;
@@ -475,11 +534,24 @@ export function buildConversationStateLogSummary(input: {
       qaModeLabel: QA_MODE_LABELS[analysis.suggestedQaMode],
       followUpTargetLabel: getFieldLabel(analysis.suggestedFollowUpTarget),
     },
+    questionPlanning: {
+      ...summarizeLlmFallbackStatus(analysis),
+      selectedGapType: analysis.questionPlan?.selectedQuestion.targetType ?? "none",
+      targetFieldLabel: getFieldLabel(analysis.questionPlan?.selectedTargetField),
+      targetSlotLabel: getSlotLabel(analysis.questionPlan?.selectedTargetSlot),
+      targetAxesSummary: analysis.questionPlan?.selectedTargetAxes.join(" / ") ?? "none",
+      questionModeLabel: getQuestionModeLabel(analysis.questionPlan?.selectedQuestion.questionMode),
+      expectedInformationGain: analysis.questionPlan?.selectedQuestion.expectedInformationGain ?? "none",
+      whyThisQuestion: analysis.questionPlan?.whyThisQuestion ?? "none",
+    },
     prototypeExplainability: summarizePrototypeExplainability(analysis),
     stateConstruction: {
       axisHintSummaries: topAxisHints,
       weakBiasSummaries: summarizeWeakBiasHints(analysis.weakBiasHints),
-      appliedDeltaSummaries: deltaExplanation.map((item) => `${item.summary} · ${item.gloss}`),
+      appliedDeltaSummaries:
+        deltaExplanation.length > 0
+          ? deltaExplanation.map((item) => `${item.summary} · ${item.gloss}`)
+          : ["intent stage only; initialization deltas not computed yet"],
     },
     deltaExplanation,
   } satisfies ConversationStateLogSummary;

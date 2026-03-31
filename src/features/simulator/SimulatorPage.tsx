@@ -203,6 +203,21 @@ function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary
           </div>
 
           <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Question planning</div>
+            <div className="mt-2 space-y-2 text-sm leading-6">
+              <div><span className="font-medium text-stone-800">LLM status:</span> {summary.questionPlanning.llmStatus}</div>
+              <div><span className="font-medium text-stone-800">LLM summary:</span> {summary.questionPlanning.llmSummary}</div>
+              <div><span className="font-medium text-stone-800">Gap type:</span> {summary.questionPlanning.selectedGapType}</div>
+              <div><span className="font-medium text-stone-800">Target field:</span> {summary.questionPlanning.targetFieldLabel}</div>
+              <div><span className="font-medium text-stone-800">Target slot:</span> {summary.questionPlanning.targetSlotLabel}</div>
+              <div><span className="font-medium text-stone-800">Target axes:</span> {summary.questionPlanning.targetAxesSummary}</div>
+              <div><span className="font-medium text-stone-800">Question mode:</span> {summary.questionPlanning.questionModeLabel}</div>
+              <div><span className="font-medium text-stone-800">Expected information gain:</span> {summary.questionPlanning.expectedInformationGain}</div>
+              <div><span className="font-medium text-stone-800">Why this question:</span> {summary.questionPlanning.whyThisQuestion}</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
             <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Prototype explainability</div>
             <div className="mt-2 space-y-2 text-sm leading-6">
               <div><span className="font-medium text-stone-800">Main signals:</span> {summary.prototypeExplainability.mainSignals.join(" / ")}</div>
@@ -320,6 +335,7 @@ export function SimulatorPage() {
   const [seenRefIds, setSeenRefIds] = useState<string[]>([]);
   const [rejectedRefIds, setRejectedRefIds] = useState<string[]>([]);
   const [assetPoolExhausted, setAssetPoolExhausted] = useState(false);
+  const [isIntentAnalyzing, setIsIntentAnalyzing] = useState(false);
 
   const feedbackRecords = useMemo<FeedbackRecord[]>(() => Object.entries(feedbackMap).map(([variantId, value]) => ({ variantId, value })), [feedbackMap]);
   const roundMode = getRoundMode(round);
@@ -337,7 +353,7 @@ export function SimulatorPage() {
   const preferenceCenter = useMemo(() => averagePreferenceState(anchors.map((anchor) => anchor.state)), [anchors]);
   const totalAnnotatedAssetCount = useMemo(() => referenceAssets.filter((asset) => asset.annotation).length, [referenceAssets]);
   const conversationStateLogSummary = useMemo(() => {
-    if (!intentSnapshot || !initializationExplainability) {
+    if (!intentSnapshot) {
       return null;
     }
 
@@ -348,7 +364,7 @@ export function SimulatorPage() {
       followUpQuestion: intentSnapshot.followUpQuestion,
       readyToGenerate: intentSnapshot.readyToGenerate,
       analysis: intentSnapshot.analysis,
-      initialization: initializationExplainability,
+      initialization: initializationExplainability ?? undefined,
     });
   }, [intentSnapshot, initializationExplainability]);
 
@@ -417,15 +433,21 @@ export function SimulatorPage() {
       return;
     }
 
-    const nextSnapshot = await buildIntentStabilizationSnapshot({
-      previousText: intentSnapshot?.text,
-      nextReply: trimmedText,
-      previousTurnCount: intentSnapshot?.turnCount ?? 0,
-    });
+    setIsIntentAnalyzing(true);
+    try {
+      const nextSnapshot = await buildIntentStabilizationSnapshot({
+        previousText: intentSnapshot?.text,
+        previousQuestion: intentSnapshot?.followUpQuestion,
+        nextReply: trimmedText,
+        previousTurnCount: intentSnapshot?.turnCount ?? 0,
+      });
 
-    setIntentSnapshot(nextSnapshot);
-    setEntryAnalysis(nextSnapshot.analysis);
-    setEntryText("");
+      setIntentSnapshot(nextSnapshot);
+      setEntryAnalysis(nextSnapshot.analysis);
+      setEntryText("");
+    } finally {
+      setIsIntentAnalyzing(false);
+    }
   };
 
   const handleStartFromText = () => {
@@ -527,9 +549,10 @@ export function SimulatorPage() {
                 <button
                   type="button"
                   onClick={handleContinueIntent}
+                  disabled={isIntentAnalyzing}
                   className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white"
                 >
-                  <Play className="h-4 w-4" /> {intentSnapshot ? "继续回应" : "开始理解"}
+                  <Play className="h-4 w-4" /> {isIntentAnalyzing ? "分析中..." : intentSnapshot ? "继续回应" : "开始理解"}
                 </button>
                 <button
                   type="button"
@@ -561,12 +584,21 @@ export function SimulatorPage() {
                   </div>
                 </div>
                 <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
+                  <div className="mb-1">
+                    分析状态：
+                    <span className="ml-1 font-semibold text-stone-700">
+                      {isIntentAnalyzing ? "analyzing with semantic pipeline..." : conversationStateLogSummary?.questionPlanning.llmStatus ?? "waiting for input"}
+                    </span>
+                  </div>
                   当前轮次：{intentSnapshot?.turnCount ?? 0}/3
                   <div className="mt-1">
                     {intentSnapshot?.readyToGenerate
                       ? "当前方向已经足够粗稳，可以进入第一轮探索。"
                       : "还不会立刻进入探索，先把最关键的一点再收清楚。"}
                   </div>
+                  {!isIntentAnalyzing && conversationStateLogSummary?.questionPlanning.llmSummary && (
+                    <div className="mt-2 text-stone-500">{conversationStateLogSummary.questionPlanning.llmSummary}</div>
+                  )}
                 </div>
               </div>
             </div>
