@@ -15,7 +15,13 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
   const detection = detectHighValueFieldHits(input.text);
   const directCandidates = buildDirectInterpretationCandidates(input, detection);
   const { prototypeMatches, candidates: prototypeCandidates } = await resolvePrototypeCandidates(input, detection);
-  const fallback = buildFallbackCandidateSet(input);
+  const fallback = await buildFallbackCandidateSet({
+    text: input.text,
+    detection,
+    directCandidates,
+    prototypeMatches,
+    prototypeCandidates,
+  });
   const interpretationMerge = mergeInterpretationCandidates({
     directCandidates,
     prototypeMatches,

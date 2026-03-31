@@ -202,3 +202,38 @@ class PrototypeRetrievalEntryResponse(BaseModel):
 class PrototypeRetrievalResponse(BaseModel):
     total: int
     items: List[PrototypeRetrievalEntryResponse]
+
+
+EntryAgentField = Literal[
+    "spaceContext",
+    "overallImpression",
+    "colorMood",
+    "patternTendency",
+    "arrangementTendency",
+]
+
+
+EntryAgentSlot = Literal["color", "motif", "arrangement", "impression"]
+
+
+class LlmFallbackCandidatePayload(BaseModel):
+    candidate_prototypes: List[str] = Field(default_factory=list)
+    candidate_fields: List[EntryAgentField] = Field(default_factory=list)
+    candidate_axis_hints: Dict[EntryAgentSlot, Dict[str, float]] = Field(default_factory=dict)
+    ambiguity_notes: List[str] = Field(default_factory=list)
+    needs_follow_up: bool = False
+
+
+class LlmFallbackRequest(BaseModel):
+    text: str
+    hit_fields: List[EntryAgentField] = Field(default_factory=list)
+    prototype_labels: List[str] = Field(default_factory=list)
+    trigger_reasons: List[str] = Field(default_factory=list)
+    top_k: int = Field(default=2, ge=1, le=5)
+
+
+class LlmFallbackResponse(BaseModel):
+    available: bool
+    degraded: bool
+    trigger_reasons: List[str] = Field(default_factory=list)
+    items: List[LlmFallbackCandidatePayload] = Field(default_factory=list)

@@ -13,11 +13,14 @@ from app.schemas import (
     PreferenceProfileResponse,
     PreferenceUndoResponse,
     ProductReferenceListResponse,
+    LlmFallbackRequest,
+    LlmFallbackResponse,
     PrototypeRetrievalRequest,
     PrototypeRetrievalResponse,
     PrototypeRetrievalEntryResponse,
     PromptTrace,
 )
+from app.services.local_llm_fallback import request_llm_fallback_candidates
 from app.services.retrieval_models import IndexBuildResponse, SearchMatchResponse, SearchResponse
 from app.services.preference_store import (
     clear_preference_profile,
@@ -113,6 +116,17 @@ def search_prototype_retrieval(payload: PrototypeRetrievalRequest) -> PrototypeR
     return PrototypeRetrievalResponse(
         total=len(matches),
         items=[PrototypeRetrievalEntryResponse(**match.__dict__) for match in matches],
+    )
+
+
+@router.post("/llm-fallback/candidates", response_model=LlmFallbackResponse)
+def generate_llm_fallback_candidates(payload: LlmFallbackRequest) -> LlmFallbackResponse:
+    return request_llm_fallback_candidates(
+        text=payload.text,
+        hit_fields=payload.hit_fields,
+        prototype_labels=payload.prototype_labels,
+        trigger_reasons=payload.trigger_reasons,
+        top_k=payload.top_k,
     )
 
 

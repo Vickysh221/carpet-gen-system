@@ -191,6 +191,8 @@ export interface SemanticUnderstanding {
   openQuestions: string[];
   conflictSummary: string[];
   narrative: string;
+  /** true when narrative is a fallback placeholder — no resolved readings were found */
+  isWeakNarrative: boolean;
 }
 
 export interface SemanticGap {

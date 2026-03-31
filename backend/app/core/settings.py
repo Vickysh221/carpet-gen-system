@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -18,3 +19,6 @@ PROTOTYPE_TEXT_INDEX_MANIFEST_FILE = PROTOTYPE_TEXT_RETRIEVAL_ROOT / "manifest.j
 
 EMBEDDING_MODEL_NAME = "openai/clip-vit-base-patch32"
 PROTOTYPE_TEXT_MODEL_NAME = "intfloat/multilingual-e5-small"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b-instruct")
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "6"))

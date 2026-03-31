@@ -180,6 +180,36 @@ export type PrototypeRetrievalHit = {
   explainText: string;
 };
 
+type ApiLlmFallbackCandidate = {
+  candidate_prototypes: string[];
+  candidate_fields: string[];
+  candidate_axis_hints: Record<string, Record<string, number>>;
+  ambiguity_notes: string[];
+  needs_follow_up: boolean;
+};
+
+type ApiLlmFallbackResponse = {
+  available: boolean;
+  degraded: boolean;
+  trigger_reasons: string[];
+  items: ApiLlmFallbackCandidate[];
+};
+
+export type LlmFallbackCandidate = {
+  candidatePrototypes: string[];
+  candidateFields: string[];
+  candidateAxisHints: Record<string, Record<string, number>>;
+  ambiguityNotes: string[];
+  needsFollowUp: boolean;
+};
+
+export type LlmFallbackResponse = {
+  available: boolean;
+  degraded: boolean;
+  triggerReasons: string[];
+  items: LlmFallbackCandidate[];
+};
+
 function mapAxis(axis: ApiInternalAxis): InternalAxis {
   return {
     key: axis.key,
@@ -310,6 +340,38 @@ export async function fetchPrototypeRetrieval(text: string, topK = 5): Promise<P
     similarityScore: item.similarity_score,
     explainText: item.explain_text,
   }));
+}
+
+export async function fetchLlmFallbackCandidates(payload: {
+  text: string;
+  hitFields: string[];
+  prototypeLabels: string[];
+  triggerReasons: string[];
+  topK?: number;
+}): Promise<LlmFallbackResponse> {
+  const response = await apiRequest<ApiLlmFallbackResponse>("/llm-fallback/candidates", {
+    method: "POST",
+    body: JSON.stringify({
+      text: payload.text,
+      hit_fields: payload.hitFields,
+      prototype_labels: payload.prototypeLabels,
+      trigger_reasons: payload.triggerReasons,
+      top_k: payload.topK ?? 2,
+    }),
+  });
+
+  return {
+    available: response.available,
+    degraded: response.degraded,
+    triggerReasons: response.trigger_reasons,
+    items: response.items.map((item) => ({
+      candidatePrototypes: item.candidate_prototypes,
+      candidateFields: item.candidate_fields,
+      candidateAxisHints: item.candidate_axis_hints,
+      ambiguityNotes: item.ambiguity_notes,
+      needsFollowUp: item.needs_follow_up,
+    })),
+  };
 }
 
 export async function bootstrapSession(referenceImageName: string, clientId?: string) {

@@ -9,12 +9,36 @@ function buildDirectionLabel(reading: InterpretationCandidate) {
     return "颜色偏暖、偏自然一些";
   }
 
+  if (reading.semanticHints?.colorMood === "warm") {
+    return "颜色偏暖、更有包裹感";
+  }
+
+  if (reading.semanticHints?.colorMood === "muted") {
+    return "颜色先收、别太跳";
+  }
+
+  if (reading.semanticHints?.impression === "calm") {
+    return "整体先偏安静放松一点";
+  }
+
+  if (reading.semanticHints?.impression === "energetic") {
+    return "整体先带一点存在感和活力";
+  }
+
   if (reading.semanticHints?.impression === "warm") {
     return "整体氛围偏温暖、有陪伴感";
   }
 
   if (reading.semanticHints?.patternTendency === "natural") {
     return "图案倾向更自然生长感";
+  }
+
+  if (reading.semanticHints?.arrangementTendency === "open") {
+    return "排布先松一点、留些呼吸感";
+  }
+
+  if (reading.semanticHints?.arrangementTendency === "ordered") {
+    return "先保持整齐有秩序";
   }
 
   return reading.label;
@@ -94,12 +118,15 @@ export function buildSemanticUnderstanding(input: {
   ].slice(0, 3);
   const confirmedDirections = collectConfirmedDirections(finalReadings);
 
+  const isWeakNarrative = confirmedDirections.length === 0 && activeReadings.length === 0;
+
   return {
     confirmedDirections,
     activeReadings,
     secondaryReadings,
     openQuestions,
     conflictSummary,
+    isWeakNarrative,
     narrative: buildNarrative({
       confirmedDirections,
       activeReadings,

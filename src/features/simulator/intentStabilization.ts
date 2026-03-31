@@ -117,7 +117,10 @@ function buildFollowUpQuestion(analysis: EntryAgentResult) {
 }
 
 function getSemanticUnderstandingNarrative(analysis: EntryAgentResult) {
-  return analysis.semanticUnderstanding.narrative || buildOverallUnderstanding(analysis);
+  if (!analysis.semanticUnderstanding.isWeakNarrative) {
+    return analysis.semanticUnderstanding.narrative;
+  }
+  return buildOverallUnderstanding(analysis) || analysis.semanticUnderstanding.narrative;
 }
 
 function getSemanticQuestionPrompt(analysis: EntryAgentResult) {
