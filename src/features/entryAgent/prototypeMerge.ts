@@ -6,10 +6,18 @@ import type {
   MergeRelation,
   PrototypeMatch,
   ReadingDecision,
+  SemanticUnit,
 } from "./types";
 
 function unique<T>(items: T[]) {
   return [...new Set(items)];
+}
+
+function getOwnershipRank(ownershipClass: InterpretationCandidate["ownershipClass"]) {
+  if (ownershipClass === "primary-eligible") return 3;
+  if (ownershipClass === "secondary-only") return 2;
+  if (ownershipClass === "ambiguity-only") return 1;
+  return 2;
 }
 
 function relationFromCandidates(primary: InterpretationCandidate, secondary: InterpretationCandidate): MergeRelation {
@@ -41,9 +49,10 @@ export function mergeInterpretationCandidates(input: {
   directCandidates: InterpretationCandidate[];
   prototypeMatches: PrototypeMatch[];
   prototypeCandidates: InterpretationCandidate[];
+  semanticUnits: SemanticUnit[];
   fallback: FallbackCandidateSet;
 }): InterpretationMergeResult {
-  const { directCandidates, prototypeMatches, prototypeCandidates, fallback } = input;
+  const { directCandidates, prototypeMatches, prototypeCandidates, semanticUnits, fallback } = input;
   const candidateReadings = [...directCandidates, ...prototypeCandidates, ...fallback.candidates];
   const mergeGroups: MergeDecisionGroup[] = [];
   const keptReadings: ReadingDecision[] = [];
@@ -54,6 +63,7 @@ export function mergeInterpretationCandidates(input: {
     return {
       directCandidates,
       prototypeMatches,
+      semanticUnits,
       candidateReadings,
       mergeGroups,
       keptReadings,
@@ -64,6 +74,11 @@ export function mergeInterpretationCandidates(input: {
   }
 
   const sorted = [...candidateReadings].sort((left, right) => {
+    const ownershipDelta = getOwnershipRank(right.ownershipClass) - getOwnershipRank(left.ownershipClass);
+    if (ownershipDelta !== 0) {
+      return ownershipDelta;
+    }
+
     if (right.strength !== left.strength) {
       return right.strength - left.strength;
     }
@@ -98,7 +113,11 @@ export function mergeInterpretationCandidates(input: {
     const relation = relationFromCandidates(primary, candidate);
     const sameSlot = candidate.primarySlot === primary.primarySlot;
     const sameDirection = candidate.polarity === primary.polarity;
-    const shouldKeepAsSecondary = relation === "refinement" && candidate.confidence >= 0.45 && !keptIds.has(candidate.id);
+    const shouldKeepAsSecondary =
+      relation === "refinement" &&
+      candidate.confidence >= 0.45 &&
+      candidate.ownershipClass !== "ambiguity-only" &&
+      !keptIds.has(candidate.id);
     const shouldSuppress =
       (candidate.sourceType === "fallback-candidate" && hasNonFallbackCandidate) ||
       relation === "conflict" ||
@@ -150,6 +169,7 @@ export function mergeInterpretationCandidates(input: {
   return {
     directCandidates,
     prototypeMatches,
+    semanticUnits,
     candidateReadings,
     mergeGroups,
     keptReadings,

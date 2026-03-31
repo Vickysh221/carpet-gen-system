@@ -1,4 +1,4 @@
-import type { EntryAgentDetectionResult, InterpretationCandidate, EntryAgentInput } from "./types";
+import type { EntryAgentDetectionResult, InterpretationCandidate, EntryAgentInput, SemanticUnit } from "./types";
 
 function normalizeText(text: string) {
   return text.toLowerCase().replace(/\s+/g, "").trim();
@@ -11,9 +11,212 @@ function clamp01(value: number) {
 export function buildDirectInterpretationCandidates(
   input: Pick<EntryAgentInput, "text">,
   detection: EntryAgentDetectionResult,
+  semanticUnits: SemanticUnit[] = [],
 ): InterpretationCandidate[] {
   const text = normalizeText(input.text);
   const candidates: InterpretationCandidate[] = [];
+
+  const directUnits = semanticUnits.filter((unit) => unit.routeHint === "direct");
+  directUnits.forEach((unit) => {
+    if (!unit.targetField || !unit.targetSlot || !detection.hitFields.includes(unit.targetField)) {
+      return;
+    }
+
+    if (unit.cue === "张扬") {
+      candidates.push({
+        id: "direct-impression-showy",
+        label: "张扬",
+        sourceType: "direct",
+        sourceId: "direct:impression-showy",
+        field: "overallImpression",
+        primarySlot: "impression",
+        secondarySlots: [],
+        polarity: "increase",
+        strength: 0.82,
+        confidence: 0.8,
+        matchedCues: [unit.cue],
+        semanticHints: { impression: "energetic" },
+        axisHints: {
+          impression: { energy: clamp01(0.84), calm: clamp01(0.24) },
+        },
+        patchIntent: {
+          impression: { energy: 0.14, calm: -0.08 },
+        },
+        matchedSemanticUnitIds: [unit.id],
+        ownershipClass: unit.ownershipClass,
+        questionKindHint: unit.questionKindHint,
+        disambiguationAxes: unit.disambiguationAxes,
+        informationGainHint: unit.informationGainHint,
+        note: "direct hit：用户明确在要更外放、更有表现力的整体印象。",
+      });
+      return;
+    }
+
+    if (unit.cue === "快乐") {
+      candidates.push({
+        id: "direct-impression-joyful",
+        label: "快乐",
+        sourceType: "direct",
+        sourceId: "direct:impression-joyful",
+        field: "overallImpression",
+        primarySlot: "impression",
+        secondarySlots: [],
+        polarity: "increase",
+        strength: 0.74,
+        confidence: 0.72,
+        matchedCues: [unit.cue],
+        semanticHints: { impression: "joyful" },
+        axisHints: {
+          impression: { energy: clamp01(0.7), softness: clamp01(0.56) },
+        },
+        patchIntent: {
+          impression: { energy: 0.1, softness: 0.04 },
+        },
+        matchedSemanticUnitIds: [unit.id],
+        ownershipClass: unit.ownershipClass,
+        questionKindHint: unit.questionKindHint,
+        disambiguationAxes: unit.disambiguationAxes,
+        informationGainHint: unit.informationGainHint,
+        note: "direct hit：用户表达偏明快、轻快、有活力的快乐感。",
+      });
+      return;
+    }
+
+    if (unit.cue === "低调" || unit.cue === "别太抢") {
+      candidates.push({
+        id: unit.cue === "低调" ? "direct-impression-lowkey" : "direct-impression-not-too-loud",
+        label: unit.cue,
+        sourceType: "direct",
+        sourceId: unit.cue === "低调" ? "direct:impression-lowkey" : "direct:impression-not-too-loud",
+        field: "overallImpression",
+        primarySlot: "impression",
+        secondarySlots: [],
+        polarity: "decrease",
+        strength: 0.8,
+        confidence: 0.78,
+        matchedCues: [unit.cue],
+        semanticHints: { impression: "restrained" },
+        axisHints: {
+          impression: { calm: clamp01(0.76), energy: clamp01(0.28) },
+        },
+        patchIntent: {
+          impression: { calm: 0.1, energy: -0.08 },
+        },
+        matchedSemanticUnitIds: [unit.id],
+        ownershipClass: unit.ownershipClass,
+        questionKindHint: unit.questionKindHint,
+        disambiguationAxes: unit.disambiguationAxes,
+        informationGainHint: unit.informationGainHint,
+        note: "direct hit：用户希望整体更低调克制，不要太抢眼。",
+      });
+      return;
+    }
+
+    if (unit.cue === "克制") {
+      candidates.push({
+        id: "direct-impression-restrained",
+        label: "克制",
+        sourceType: "direct",
+        sourceId: "direct:impression-restrained",
+        field: "overallImpression",
+        primarySlot: "impression",
+        secondarySlots: ["color"],
+        polarity: "decrease",
+        strength: 0.62,
+        confidence: 0.58,
+        matchedCues: [unit.cue],
+        semanticHints: { impression: "restrained" },
+        axisHints: {
+          impression: { calm: clamp01(0.66), energy: clamp01(0.34) },
+          color: { saturation: clamp01(0.38) },
+        },
+        patchIntent: {
+          impression: { calm: 0.06, energy: -0.04 },
+          color: { saturation: -0.02 },
+        },
+        matchedSemanticUnitIds: [unit.id],
+        ownershipClass: unit.ownershipClass,
+        questionKindHint: unit.questionKindHint,
+        disambiguationAxes: unit.disambiguationAxes,
+        informationGainHint: unit.informationGainHint,
+        note: "“克制”可能在说整体气质，也可能在说颜色存在感，当前先保留 impression 主读法。",
+      });
+      candidates.push({
+        id: "direct-color-restrained",
+        label: "克制",
+        sourceType: "direct",
+        sourceId: "direct:color-restrained",
+        field: "colorMood",
+        primarySlot: "color",
+        secondarySlots: ["impression"],
+        polarity: "decrease",
+        strength: 0.64,
+        confidence: 0.6,
+        matchedCues: [unit.cue],
+        semanticHints: { colorMood: "muted" },
+        axisHints: {
+          color: { saturation: clamp01(0.32) },
+          impression: { calm: clamp01(0.58) },
+        },
+        patchIntent: {
+          color: { saturation: -0.08 },
+          impression: { calm: 0.02 },
+        },
+        matchedSemanticUnitIds: [unit.id],
+        ownershipClass: unit.ownershipClass,
+        questionKindHint: unit.questionKindHint,
+        disambiguationAxes: unit.disambiguationAxes,
+        informationGainHint: unit.informationGainHint,
+        note: "“克制”也可能在说颜色存在感 restraint，当前保留 color 次读法等待澄清。",
+      });
+      return;
+    }
+
+    if (unit.cue === "草色" || unit.cue === "淡一点" || unit.cue === "收一点") {
+      candidates.push({
+        id:
+          unit.cue === "草色"
+            ? "direct-color-grassy"
+            : unit.cue === "淡一点"
+              ? "direct-color-lighter"
+              : "direct-color-more-muted",
+        label: unit.cue,
+        sourceType: "direct",
+        sourceId:
+          unit.cue === "草色"
+            ? "direct:color-grassy"
+            : unit.cue === "淡一点"
+              ? "direct:color-lighter"
+              : "direct:color-more-muted",
+        field: "colorMood",
+        primarySlot: "color",
+        secondarySlots: unit.cue === "草色" ? ["impression"] : [],
+        polarity: "decrease",
+        strength: unit.cue === "草色" ? 0.64 : 0.76,
+        confidence: unit.cue === "草色" ? 0.62 : 0.74,
+        matchedCues: [unit.cue],
+        semanticHints: unit.cue === "草色" ? { colorMood: "earthy" } : { colorMood: "muted" },
+        axisHints: {
+          color: {
+            warmth: clamp01(unit.cue === "草色" ? 0.58 : 0.5),
+            saturation: clamp01(unit.cue === "草色" ? 0.36 : 0.28),
+          },
+        },
+        patchIntent: {
+          color: {
+            warmth: unit.cue === "草色" ? 0.04 : 0,
+            saturation: unit.cue === "草色" ? -0.06 : -0.1,
+          },
+        },
+        matchedSemanticUnitIds: [unit.id],
+        ownershipClass: unit.ownershipClass,
+        questionKindHint: unit.questionKindHint,
+        disambiguationAxes: unit.disambiguationAxes,
+        informationGainHint: unit.informationGainHint,
+        note: unit.cue === "草色" ? "direct hit：先把它理解为自然、低饱和的草木色方向。" : "direct hit：颜色先收一点，别太跳。",
+      });
+    }
+  });
 
   if (detection.hitFields.includes("patternTendency") && (text.includes("不要太花") || text.includes("别太花"))) {
     candidates.push({

@@ -20,6 +20,18 @@ function buildPromptForGap(gap: SemanticGap) {
     return `${gap.reason} 你更想先确认哪一种理解？`;
   }
 
+  if (gap.type === "weak-anchor") {
+    const spec = getSlotQuestionSpec(gap.targetField);
+    const modeSpec = spec?.modes.find((item) => item.mode === gap.questionMode) ?? spec?.modes[0];
+    if (gap.questionKind === "strength") {
+      return `${gap.reason} 这层感觉你是明确想保留，还是只是希望别太重、点到为止就好？`;
+    }
+    if (modeSpec) {
+      return `${gap.reason} ${modeSpec.buildPrompt({ reason: gap.reason })}`;
+    }
+    return `${gap.reason} 这层 subtle 感觉你是明确想保留，还是只是顺带有一点就行？`;
+  }
+
   const spec = getSlotQuestionSpec(gap.targetField);
   const modeSpec = spec?.modes.find((item) => item.mode === gap.questionMode) ?? spec?.modes[0];
   if (modeSpec) {
@@ -35,7 +47,9 @@ function buildCandidate(gap: SemanticGap): NextQuestionCandidate {
       ? "resolve-prototype-conflict"
       : gap.type === "unresolved-ambiguity"
         ? "resolve-ambiguity"
-        : "fill-missing-slot";
+        : gap.type === "weak-anchor"
+          ? "stabilize-weak-anchor"
+          : "fill-missing-slot";
 
   return {
     id: `question:${gap.id}`,
@@ -45,6 +59,7 @@ function buildCandidate(gap: SemanticGap): NextQuestionCandidate {
     targetSlot: gap.targetSlot,
     targetAxes: gap.targetAxes,
     questionMode: gap.questionMode,
+    questionKind: gap.questionKind,
     questionIntent,
     prompt: buildPromptForGap(gap),
     priority: gap.priority,

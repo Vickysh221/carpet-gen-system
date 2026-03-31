@@ -53,11 +53,14 @@ function buildDirectionLabel(reading: InterpretationCandidate) {
 }
 
 function collectConfirmedDirections(readings: InterpretationCandidate[]): SemanticDirection[] {
-  return readings.slice(0, 3).map((reading) => ({
-    label: buildDirectionLabel(reading),
-    sourceReadingIds: [reading.id],
-    confidence: reading.confidence,
-  }));
+  return readings
+    .filter((reading) => reading.ownershipClass !== "ambiguity-only")
+    .slice(0, 3)
+    .map((reading) => ({
+      label: buildDirectionLabel(reading),
+      sourceReadingIds: [reading.id],
+      confidence: reading.confidence,
+    }));
 }
 
 function buildNarrative(input: {

@@ -18,11 +18,13 @@ export type QaMode =
   | "slot-revision"
   | "lock-reinforcement";
 
-export type SemanticGapType = "prototype-conflict" | "unresolved-ambiguity" | "missing-slot";
+export type SemanticGapType = "prototype-conflict" | "unresolved-ambiguity" | "missing-slot" | "weak-anchor";
 
 export type QuestionTargetType = "conflict" | "ambiguity" | "slot";
 
-export type QuestionIntent = "resolve-prototype-conflict" | "resolve-ambiguity" | "fill-missing-slot";
+export type QuestionIntent = "resolve-prototype-conflict" | "resolve-ambiguity" | "fill-missing-slot" | "stabilize-weak-anchor";
+
+export type QuestionKind = "contrast" | "clarify" | "anchor" | "strength";
 
 export type SlotQuestionMode =
   | "contrast-calm-vs-presence"
@@ -71,6 +73,29 @@ export type InterpretationSourceType = "direct" | "prototype" | "fallback-candid
 
 export type MergeRelation = "reinforcement" | "refinement" | "conflict";
 
+export type SemanticCueType = "direct" | "prototype" | "poetic" | "impression-energy" | "unsupported";
+
+export type SemanticRouteHint = "direct" | "prototype" | "retrieval-entry" | "fallback" | "weak-retain";
+
+export type NarrativeOwnershipClass = "primary-eligible" | "secondary-only" | "ambiguity-only";
+
+export interface SemanticUnit {
+  id: string;
+  cue: string;
+  cueType: SemanticCueType;
+  routeHint: SemanticRouteHint;
+  ownershipClass: NarrativeOwnershipClass;
+  questionKindHint: QuestionKind;
+  disambiguationAxes: EntryAgentAxisPath[];
+  informationGainHint: string;
+  targetField?: HighValueField;
+  targetSlot?: EntryAgentSlotKey;
+  candidateReadings: string[];
+  axisHints?: EntryAgentAxisHints;
+  confidence: number;
+  weight: number;
+}
+
 export interface PrototypeRetrievalEvidence {
   entryId: string;
   entryLabel: string;
@@ -95,6 +120,11 @@ export interface InterpretationCandidate {
   semanticHints?: Record<string, string | string[]>;
   axisHints: EntryAgentAxisHints;
   patchIntent: EntryAgentStatePatch;
+  matchedSemanticUnitIds?: string[];
+  ownershipClass?: NarrativeOwnershipClass;
+  questionKindHint?: QuestionKind;
+  disambiguationAxes?: EntryAgentAxisPath[];
+  informationGainHint?: string;
   note?: string;
 }
 
@@ -145,6 +175,7 @@ export interface FallbackCandidateSet {
 export interface InterpretationMergeResult {
   directCandidates: InterpretationCandidate[];
   prototypeMatches: PrototypeMatch[];
+  semanticUnits: SemanticUnit[];
   candidateReadings: InterpretationCandidate[];
   mergeGroups: MergeDecisionGroup[];
   keptReadings: ReadingDecision[];
@@ -220,10 +251,13 @@ export interface SemanticGap {
   targetSlot?: EntryAgentSlotKey;
   targetAxes: EntryAgentAxisPath[];
   questionMode?: SlotQuestionMode;
+  questionKind?: QuestionKind;
   relatedReadingIds: string[];
+  sourceUnitIds?: string[];
   reason: string;
   evidence: string[];
   expectedGain: string;
+  informationGainHint?: string;
   rankingReason: string;
 }
 
@@ -235,6 +269,7 @@ export interface NextQuestionCandidate {
   targetSlot?: EntryAgentSlotKey;
   targetAxes: EntryAgentAxisPath[];
   questionMode?: SlotQuestionMode;
+  questionKind?: QuestionKind;
   questionIntent: QuestionIntent;
   prompt: string;
   priority: number;

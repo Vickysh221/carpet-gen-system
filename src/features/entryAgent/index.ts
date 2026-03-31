@@ -5,6 +5,7 @@ import { deriveFollowUpRecommendation } from "./followUpRecommendation";
 import { mergeInterpretationCandidates } from "./prototypeMerge";
 import { resolvePrototypeCandidates } from "./prototypeMatching";
 import { buildQuestionPlan } from "./questionPlanning";
+import { decomposeSemanticCues } from "./semanticCueDecomposition";
 import { buildSemanticGaps } from "./semanticGapPlanner";
 import { buildSemanticUnderstanding } from "./semanticUnderstanding";
 import { buildSemanticToAxisBridge } from "./semanticToAxisBridge";
@@ -13,8 +14,9 @@ import type { EntryAgentInput, EntryAgentResult } from "./types";
 
 export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAgentResult> {
   const detection = detectHighValueFieldHits(input.text);
-  const directCandidates = buildDirectInterpretationCandidates(input, detection);
-  const { prototypeMatches, candidates: prototypeCandidates } = await resolvePrototypeCandidates(input, detection);
+  const semanticUnits = decomposeSemanticCues(input, detection);
+  const directCandidates = buildDirectInterpretationCandidates(input, detection, semanticUnits);
+  const { prototypeMatches, candidates: prototypeCandidates } = await resolvePrototypeCandidates(input, detection, semanticUnits);
   const fallback = await buildFallbackCandidateSet({
     text: input.text,
     detection,
@@ -26,6 +28,7 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     directCandidates,
     prototypeMatches,
     prototypeCandidates,
+    semanticUnits,
     fallback,
   });
   const bridge = buildSemanticToAxisBridge(input, detection, interpretationMerge);

@@ -7,6 +7,7 @@ import type {
   PrototypeMatch,
   PrototypeRetrievalEvidence,
   PrototypeRouteType,
+  SemanticUnit,
 } from "./types";
 
 function normalizeText(text: string) {
@@ -77,6 +78,7 @@ function buildRetrievalEvidence(matches: Array<{ entryId: string; label: string;
 export async function resolvePrototypeCandidates(
   input: Pick<EntryAgentInput, "text">,
   detection: EntryAgentDetectionResult,
+  semanticUnits: SemanticUnit[] = [],
   provider: PrototypeRetrievalProvider = backendPrototypeRetrievalProvider,
 ): Promise<{
   prototypeMatches: PrototypeMatch[];
@@ -85,10 +87,14 @@ export async function resolvePrototypeCandidates(
   const text = normalizeText(input.text);
   const prototypeMatches: PrototypeMatch[] = [];
   const candidates: InterpretationCandidate[] = [];
-  const retrievalHits = await provider.search({ text, topK: 5 });
+  const retrievalQueryUnits = semanticUnits.filter((unit) => unit.routeHint === "prototype" || unit.routeHint === "retrieval-entry");
+  const retrievalQueries = retrievalQueryUnits.length > 0 ? retrievalQueryUnits.map((unit) => unit.cue) : [text];
+  const retrievalHitGroups = await Promise.all(retrievalQueries.map((query) => provider.search({ text: query, topK: 5 })));
+  const retrievalHits = retrievalHitGroups.flat();
 
   PROTOTYPE_REGISTRY.forEach((prototype) => {
     const matchedAliases = prototype.aliases.filter((alias) => text.includes(alias));
+    const matchedUnits = semanticUnits.filter((unit) => prototype.aliases.some((alias) => unit.cue.includes(alias) || alias.includes(unit.cue)));
     const aliasScore = computeAliasScore(matchedAliases.length);
 
     const prototypeRetrievalHits = retrievalHits
@@ -134,6 +140,11 @@ export async function resolvePrototypeCandidates(
 
       const candidateId = buildCandidateId(prototype.id, reading.id);
       candidateIds.push(candidateId);
+      const sourceUnitIds = matchedUnits.map((unit) => unit.id);
+      const inheritedQuestionKind = matchedUnits[0]?.questionKindHint ?? prototype.defaultQuestionKindHint;
+      const inheritedAxes = matchedUnits[0]?.disambiguationAxes ?? prototype.defaultDisambiguationAxes;
+      const inheritedOwnership = matchedUnits[0]?.ownershipClass ?? prototype.defaultOwnershipClass;
+      const inheritedGainHint = matchedUnits[0]?.informationGainHint ?? prototype.defaultInformationGainHint;
       candidates.push({
         id: candidateId,
         label: reading.label,
@@ -149,6 +160,11 @@ export async function resolvePrototypeCandidates(
         semanticHints: reading.semanticHints,
         axisHints: reading.axisHints,
         patchIntent: reading.patchIntent,
+        matchedSemanticUnitIds: sourceUnitIds.length > 0 ? sourceUnitIds : undefined,
+        ownershipClass: inheritedOwnership,
+        questionKindHint: inheritedQuestionKind,
+        disambiguationAxes: inheritedAxes,
+        informationGainHint: inheritedGainHint,
         note: reading.note,
       });
     });

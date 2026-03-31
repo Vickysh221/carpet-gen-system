@@ -98,6 +98,10 @@ function mapQuestionPlanToQaMode(questionPlan: QuestionPlan | undefined) {
     return "exploratory-intake" satisfies QaMode;
   }
 
+  if (questionPlan.selectedQuestion.questionIntent === "stabilize-weak-anchor") {
+    return "exploratory-intake" satisfies QaMode;
+  }
+
   return "slot-completion" satisfies QaMode;
 }
 
