@@ -1,6 +1,7 @@
 import type {
   EntryAgentBridgeResult,
   EntryAgentResult,
+  HighValueField,
   InterpretationCandidate,
   QuestionPlan,
   SemanticDirection,
@@ -71,6 +72,15 @@ function collectConfirmedDirections(readings: InterpretationCandidate[]): Semant
     }));
 }
 
+function toFriendlyFocus(field: HighValueField | undefined): string | undefined {
+  if (field === "colorMood") return "颜色方向";
+  if (field === "patternTendency") return "图案感";
+  if (field === "arrangementTendency") return "排布方式";
+  if (field === "overallImpression") return "整体氛围";
+  if (field === "spaceContext") return "空间场景";
+  return undefined;
+}
+
 function buildNarrative(input: {
   confirmedDirections: SemanticDirection[];
   activeReadings: SemanticUnderstanding["activeReadings"];
@@ -83,27 +93,28 @@ function buildNarrative(input: {
   const parts: string[] = [];
 
   if (input.confirmedDirections.length > 0) {
-    parts.push(`当前主要在往${input.confirmedDirections.map((item) => item.label).join("、")}的方向收。`);
+    parts.push(`我先把这里理解成：${input.confirmedDirections.map((item) => item.label).join("、")}。`);
   } else if (input.activeReadings.length > 0) {
-    parts.push(`当前先保留的解释是${input.activeReadings.map((item) => item.label).join("、")}。`);
+    parts.push(`目前先保留的方向是${input.activeReadings.map((item) => item.label).join("、")}。`);
   } else {
-    parts.push("当前只抓到了一些很粗的方向，还没有形成稳定主解释。");
+    parts.push("我先有一个很粗的感觉，还需要再多了解一点。");
   }
 
   if (input.secondaryReadings.length > 0) {
-    parts.push(`同时还保留了${input.secondaryReadings.map((item) => item.label).join("、")}作为次级解释。`);
+    parts.push(`${input.secondaryReadings.map((item) => item.label).join("、")}这边也还没完全排除。`);
   }
 
   if (input.conflictSummary.length > 0) {
-    parts.push(`眼下最需要处理的是${input.conflictSummary[0]}。`);
+    parts.push("有一点还没想清楚，下一句想再确认一下。");
   } else if (input.openQuestions.length > 0) {
-    parts.push(`还没完全确认的是${input.openQuestions[0]}。`);
+    parts.push("还有一块还没完全收清楚。");
   }
 
-  if (input.primaryGap?.targetSlot && input.questionPlan?.selectedQuestion.expectedInformationGain) {
-    parts.push(`下一句会继续把这块信息收清楚，重点是${input.questionPlan.selectedQuestion.expectedInformationGain}`);
+  const friendlyFocus = toFriendlyFocus(input.questionPlan?.selectedTargetField ?? input.primaryGap?.targetField);
+  if (friendlyFocus) {
+    parts.push(`下一个想多了解一点你对${friendlyFocus}的感觉。`);
   } else if (input.primaryGap?.targetSlot) {
-    parts.push("下一句会继续把当前最关键的一块信息收清楚。");
+    parts.push("还有一块想再多问问你。");
   }
 
   return parts.join("");

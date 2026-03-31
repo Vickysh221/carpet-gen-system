@@ -236,6 +236,15 @@ function buildQuestionTrace(input: {
   };
 }
 
+function toFriendlyFocus(field: HighValueField | undefined): string | undefined {
+  if (field === "colorMood") return "颜色方向";
+  if (field === "patternTendency") return "图案感";
+  if (field === "arrangementTendency") return "排布方式";
+  if (field === "overallImpression") return "整体氛围";
+  if (field === "spaceContext") return "空间场景";
+  return undefined;
+}
+
 function buildCumulativeUnderstanding(input: {
   analysis: EntryAgentResult;
   cumulativeCanvas?: FuliSemanticCanvas;
@@ -250,23 +259,26 @@ function buildCumulativeUnderstanding(input: {
   const phrases: string[] = [];
 
   if (canvas.narrativePolicy.mustPreserve.some((cue) => ["绿意", "绿意盎然", "草色", "春意"].includes(cue))) {
-    phrases.push("目前几轮累积下来，主意象稳定落在春绿、轻可见、不是浓重铺满的方向。");
+    phrases.push("聊了几轮下来，我先把主方向锁在春绿、若有若无、不是浓重铺满这边。");
   } else if (canvas.narrativePolicy.mustNotOverLiteralize.includes("咖啡时光")) {
-    phrases.push("目前几轮累积下来，主意象更像日常陪伴、慢下来、低刺激温度感，而不是一个具体咖啡色方案。");
+    phrases.push("聊了几轮下来，我先把它理解成日常陪伴、慢节奏、低刺激的温度感，而不是一个具体的咖啡色方案。");
   } else if (canvas.narrativePolicy.directionalDominant.some((cue) => ["张扬", "快乐"].includes(cue))) {
-    phrases.push("目前几轮累积下来，主意象偏向快乐、有张力、存在感明确，但还没完全收清楚边界。");
+    phrases.push("聊了几轮下来，我感觉你更想要有点张力、存在感明确的方向，但边界还没完全收清楚。");
   } else if (canvas.conceptualAxes.length > 0) {
-    phrases.push(`目前几轮累积下来，主意象主要在往${canvas.conceptualAxes.slice(0, 3).join("、")}的方向收。`);
+    phrases.push(`聊了几轮下来，主方向慢慢收向${canvas.conceptualAxes.slice(0, 3).join("、")}这边。`);
   }
 
   if (input.answerAlignment.status === "shifted") {
-    phrases.push("这一轮用户明显把方向切到了新的语义线程，所以下一句会跟着新意象继续问，而不是重复上一问。");
+    phrases.push("你这轮切到了一个新方向，我跟着往那边走，不再重复上一个问题了。");
   } else if (input.answerAlignment.status === "partial") {
-    phrases.push("这一轮既回应了上一问，也补进了新线索，所以下一句会顺着更强的新线索改写问题。");
+    phrases.push("你同时给了我一个新线索，我把问题跟着更新了一下。");
   }
 
-  if (input.analysis.questionPlan?.selectedQuestion.expectedInformationGain) {
-    phrases.push(`下一句会继续收还没完全确认的部分，重点是${input.analysis.questionPlan.selectedQuestion.expectedInformationGain}`);
+  const friendlyFocus = toFriendlyFocus(input.analysis.questionPlan?.selectedTargetField);
+  if (friendlyFocus) {
+    phrases.push(`下一个还想多了解一点你对${friendlyFocus}的感觉。`);
+  } else if (input.analysis.questionPlan?.selectedQuestion) {
+    phrases.push("还有一块想再多问问你。");
   }
 
   return phrases.join("");

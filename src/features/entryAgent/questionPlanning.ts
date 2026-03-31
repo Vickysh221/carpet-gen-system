@@ -2,6 +2,14 @@ import { activeAnswerAlignmentProvider } from "./answerAlignmentAdapter";
 import { getSlotQuestionSpec } from "./slotQuestionSpec";
 import type { AnswerAlignment, EntryAgentResult, NextQuestionCandidate, HighValueField, QuestionPlan, QuestionTrace, SemanticGap } from "./types";
 
+const FIELD_NEIGHBORS: Partial<Record<HighValueField, HighValueField[]>> = {
+  overallImpression: ["patternTendency", "arrangementTendency", "colorMood"],
+  patternTendency: ["arrangementTendency", "overallImpression", "colorMood"],
+  arrangementTendency: ["patternTendency", "overallImpression"],
+  colorMood: ["overallImpression", "patternTendency"],
+  spaceContext: ["overallImpression", "arrangementTendency"],
+};
+
 function quoteCue(cue: string) {
   return `“${cue.replace(/^“|”$/g, "")}”`;
 }
@@ -63,9 +71,9 @@ function buildPromptForGap(gap: SemanticGap) {
       return cueGroundedPrompt;
     }
     if (modeSpec) {
-      return `${gap.reason} ${modeSpec.buildPrompt({ reason: gap.reason })}`;
+      return modeSpec.buildPrompt({ reason: gap.reason });
     }
-    return `我现在卡在一个主解释冲突上。${gap.reason} 你更希望我先按哪一边理解？`;
+    return "有两种理解方向都说得通，你更希望我先按哪边走？";
   }
 
   if (gap.type === "unresolved-ambiguity") {
@@ -75,24 +83,27 @@ function buildPromptForGap(gap: SemanticGap) {
       return cueGroundedPrompt;
     }
     if (modeSpec) {
-      return `${gap.reason} ${modeSpec.buildPrompt({ reason: gap.reason })}`;
+      return modeSpec.buildPrompt({ reason: gap.reason });
     }
-    return `${gap.reason} 你更想先确认哪一种理解？`;
+    return "你更想先往哪个方向确认一下？";
   }
 
   if (gap.type === "weak-anchor") {
     const spec = getSlotQuestionSpec(gap.targetField);
     const modeSpec = spec?.modes.find((item) => item.mode === gap.questionMode) ?? spec?.modes[0];
     if (gap.questionKind === "strength") {
-      return `${quoteCue(getPrimaryCue(gap) ?? gap.reason)} 这层感觉你是明确想保留，还是只是希望别太重、点到为止就好？`;
+      const cue = getPrimaryCue(gap);
+      return cue
+        ? `${quoteCue(cue)} 这层感觉你是明确想保留，还是只是希望别太重、点到为止就好？`
+        : "这个方向你是明确想保留，还是只是顺带有一点就行？";
     }
     if (cueGroundedPrompt) {
       return cueGroundedPrompt;
     }
     if (modeSpec) {
-      return `${gap.reason} ${modeSpec.buildPrompt({ reason: gap.reason })}`;
+      return modeSpec.buildPrompt({ reason: gap.reason });
     }
-    return `${gap.reason} 这层 subtle 感觉你是明确想保留，还是只是顺带有一点就行？`;
+    return "这个方向你是明确想保留，还是顺带有一点就行？";
   }
 
   const spec = getSlotQuestionSpec(gap.targetField);
@@ -137,6 +148,107 @@ function buildCandidate(gap: SemanticGap): NextQuestionCandidate {
     expectedInformationGain: gap.expectedGain,
     questionWhy: `${gap.rankingReason}${cueBonus > 0 ? " 优先顺着当前 cue 往最近槽位继续追问。" : ""}${genericPenalty > 0 ? " 当前候选较泛，已下调优先级。" : ""}`.trim(),
   };
+}
+
+function countSharedAxes(left: string[], right: string[]) {
+  const rightSet = new Set(right);
+  return left.filter((axis) => rightSet.has(axis)).length;
+}
+
+function isNeighborField(source: HighValueField | undefined, target: HighValueField | undefined) {
+  if (!source || !target || source === target) {
+    return false;
+  }
+
+  return FIELD_NEIGHBORS[source]?.includes(target) ?? false;
+}
+
+function scoreContinuation(input: {
+  candidate: NextQuestionCandidate;
+  previousQuestion?: QuestionTrace;
+  answerAlignment?: AnswerAlignment;
+}) {
+  const { candidate, previousQuestion, answerAlignment } = input;
+  if (!previousQuestion || !answerAlignment) {
+    return 0;
+  }
+
+  let score = 0;
+  const sameField = candidate.targetField !== undefined && candidate.targetField === previousQuestion.targetField;
+  const sharedAxes = countSharedAxes(candidate.targetAxes, previousQuestion.targetAxes);
+  const sameAxes =
+    candidate.targetAxes.length > 0 &&
+    previousQuestion.targetAxes.length > 0 &&
+    sharedAxes === candidate.targetAxes.length &&
+    sharedAxes === previousQuestion.targetAxes.length;
+
+  if (candidate.prompt === previousQuestion.prompt) {
+    score -= 100;
+  }
+
+  if (candidate.targetRef === previousQuestion.gapId) {
+    score -= 28;
+  }
+
+  if (sameField && sameAxes) {
+    score -= 26;
+  } else if (sameField && sharedAxes > 0) {
+    score += 14;
+  } else if (sameField) {
+    score += 6;
+  }
+
+  if (isNeighborField(previousQuestion.targetField, candidate.targetField)) {
+    score += 18;
+  }
+
+  if (answerAlignment.introducedFields.length > 0 && candidate.targetField && answerAlignment.introducedFields.includes(candidate.targetField)) {
+    score += answerAlignment.status === "shifted" ? 24 : 12;
+  }
+
+  if (
+    previousQuestion.targetField === "overallImpression" &&
+    candidate.targetField === "overallImpression" &&
+    answerAlignment.status !== "shifted"
+  ) {
+    score -= 22;
+  }
+
+  if (answerAlignment.status === "answered") {
+    if (isNeighborField(previousQuestion.targetField, candidate.targetField)) {
+      score += 12;
+    }
+    if (sameField && sharedAxes === 0) {
+      score -= 8;
+    }
+  }
+
+  if (answerAlignment.status === "partial") {
+    if (sameField && !sameAxes) {
+      score += 8;
+    }
+    if (!sameField && !isNeighborField(previousQuestion.targetField, candidate.targetField)) {
+      score -= 10;
+    }
+  }
+
+  if (answerAlignment.status === "shifted" && candidate.targetField && !answerAlignment.introducedFields.includes(candidate.targetField)) {
+    score -= 12;
+  }
+
+  return score;
+}
+
+function rerankQuestionCandidates(input: {
+  questionCandidates: NextQuestionCandidate[];
+  previousQuestion?: QuestionTrace;
+  answerAlignment?: AnswerAlignment;
+}) {
+  return [...input.questionCandidates].sort((left, right) => {
+    const leftScore = left.priority + scoreContinuation({ candidate: left, previousQuestion: input.previousQuestion, answerAlignment: input.answerAlignment });
+    const rightScore = right.priority + scoreContinuation({ candidate: right, previousQuestion: input.previousQuestion, answerAlignment: input.answerAlignment });
+    return rightScore - leftScore;
+  });
 }
 
 function buildRuleBasedAnswerAlignment(input: {
@@ -288,11 +400,16 @@ export async function buildQuestionPlan(input: {
   questionCandidates: NextQuestionCandidate[];
   questionPlan?: QuestionPlan;
 }> {
-  const questionCandidates = input.semanticGaps.map(buildCandidate).sort((left, right) => right.priority - left.priority);
+  const baseCandidates = input.semanticGaps.map(buildCandidate).sort((left, right) => right.priority - left.priority);
   const answerAlignment = await evaluateAnswerAlignment({
     previousQuestion: input.previousQuestion,
     bridge: input.bridge,
     hitFields: input.hitFields,
+  });
+  const questionCandidates = rerankQuestionCandidates({
+    questionCandidates: baseCandidates,
+    previousQuestion: input.previousQuestion,
+    answerAlignment,
   });
   const { selectedQuestion, planningStrategy } = selectQuestionCandidate({
     questionCandidates,
