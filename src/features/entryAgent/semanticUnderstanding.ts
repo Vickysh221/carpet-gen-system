@@ -13,6 +13,14 @@ function buildDirectionLabel(reading: InterpretationCandidate) {
     return "图案先收一点，视觉噪音更低";
   }
 
+  if (reading.semanticHints?.colorMood === "spring-green") {
+    return "颜色先往偏春绿、轻可见的方向收";
+  }
+
+  if (reading.semanticHints?.colorMood === "spring-green-subtle") {
+    return "颜色先保留一点若有若无的春绿存在";
+  }
+
   if (reading.semanticHints?.colorMood === "earthy") {
     return "颜色偏暖、偏自然一些";
   }

@@ -195,17 +195,17 @@ export function buildDirectInterpretationCandidates(
         strength: unit.cue === "草色" ? 0.64 : 0.76,
         confidence: unit.cue === "草色" ? 0.62 : 0.74,
         matchedCues: [unit.cue],
-        semanticHints: unit.cue === "草色" ? { colorMood: "earthy" } : { colorMood: "muted" },
+        semanticHints: unit.cue === "草色" ? { colorMood: "spring-green" } : { colorMood: "muted" },
         axisHints: {
           color: {
-            warmth: clamp01(unit.cue === "草色" ? 0.58 : 0.5),
-            saturation: clamp01(unit.cue === "草色" ? 0.36 : 0.28),
+            warmth: clamp01(unit.cue === "草色" ? 0.46 : 0.5),
+            saturation: clamp01(unit.cue === "草色" ? 0.38 : 0.28),
           },
         },
         patchIntent: {
           color: {
-            warmth: unit.cue === "草色" ? 0.04 : 0,
-            saturation: unit.cue === "草色" ? -0.06 : -0.1,
+            warmth: unit.cue === "草色" ? 0 : 0,
+            saturation: unit.cue === "草色" ? -0.04 : -0.1,
           },
         },
         matchedSemanticUnitIds: [unit.id],
@@ -213,7 +213,7 @@ export function buildDirectInterpretationCandidates(
         questionKindHint: unit.questionKindHint,
         disambiguationAxes: unit.disambiguationAxes,
         informationGainHint: unit.informationGainHint,
-        note: unit.cue === "草色" ? "direct hit：先把它理解为自然、低饱和的草木色方向。" : "direct hit：颜色先收一点，别太跳。",
+        note: unit.cue === "草色" ? "direct hit：先把它理解为偏春绿、轻可见、但不过度浓重的颜色方向。" : "direct hit：颜色先收一点，别太跳。",
       });
     }
   });

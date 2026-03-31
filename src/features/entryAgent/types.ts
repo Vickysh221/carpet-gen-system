@@ -61,6 +61,37 @@ export interface WeakBiasHint {
   axes: EntryAgentAxisHints;
 }
 
+export interface FuliSemanticCanvas {
+  source?: "rule-based" | "llm" | "hybrid";
+  confidence?: number;
+  rawCues: string[];
+  conceptualAxes: string[];
+  metaphoricDomains: string[];
+  designTranslations: {
+    colorIdentity?: string[];
+    colorRestraint?: string[];
+    motifLogic?: string[];
+    arrangementLogic?: string[];
+    impressionTone?: string[];
+    materialSuggestion?: string[];
+    presenceIntensity?: string[];
+  };
+  slotMappings: {
+    targetFields: HighValueField[];
+    targetSlots: EntryAgentSlotKey[];
+    targetAxes: string[];
+  };
+  narrativePolicy: {
+    mustPreserve: string[];
+    mustNotOverLiteralize: string[];
+    directionalDominant: string[];
+  };
+  questionImplications: {
+    likelyQuestionKinds: string[];
+    likelyInformationGains: string[];
+  };
+}
+
 export interface FieldAmbiguity {
   field: HighValueField;
   note: string;
@@ -69,7 +100,7 @@ export interface FieldAmbiguity {
 
 export type PrototypeRouteType = "prototype-first" | "dual-route" | "direct-first-with-fallback";
 
-export type InterpretationSourceType = "direct" | "prototype" | "fallback-candidate";
+export type InterpretationSourceType = "semantic-canvas" | "direct" | "prototype" | "fallback-candidate";
 
 export type MergeRelation = "reinforcement" | "refinement" | "conflict";
 
@@ -173,6 +204,7 @@ export interface FallbackCandidateSet {
 }
 
 export interface InterpretationMergeResult {
+  semanticCanvasCandidates: InterpretationCandidate[];
   directCandidates: InterpretationCandidate[];
   prototypeMatches: PrototypeMatch[];
   semanticUnits: SemanticUnit[];
@@ -189,6 +221,7 @@ export interface EntryAgentInput {
   slotStates?: Partial<Record<HighValueField, SlotStateStatus>>;
   evidenceSource?: string;
   simulatorState?: SimulatorState;
+  previousQuestionTrace?: QuestionTrace;
 }
 
 export interface EntryAgentDetectionResult {
@@ -203,6 +236,7 @@ export interface EntryAgentBridgeResult {
   axisHints: EntryAgentAxisHints;
   weakBiasHints: WeakBiasHint[];
   statePatch: EntryAgentStatePatch;
+  semanticCanvas?: FuliSemanticCanvas;
 }
 
 export interface EntryAgentInterpretationResult {
@@ -259,6 +293,7 @@ export interface SemanticGap {
   expectedGain: string;
   informationGainHint?: string;
   rankingReason: string;
+  questionPromptOverride?: string;
 }
 
 export interface NextQuestionCandidate {
@@ -278,6 +313,23 @@ export interface NextQuestionCandidate {
   questionWhy: string;
 }
 
+export interface QuestionTrace {
+  turnIndex: number;
+  prompt: string;
+  targetField?: HighValueField;
+  targetSlot?: EntryAgentSlotKey;
+  targetAxes: EntryAgentAxisPath[];
+  gapId?: string;
+}
+
+export interface AnswerAlignment {
+  status: "initial" | "answered" | "partial" | "shifted";
+  introducedFields: HighValueField[];
+  note: string;
+  source?: "rules" | "llm-guard" | "hybrid";
+  confidence?: number;
+}
+
 export interface QuestionPlan {
   selectedGapId: string;
   primaryTargetType: QuestionTargetType;
@@ -289,6 +341,8 @@ export interface QuestionPlan {
   whyThisQuestion: string;
   blockedBy: string[];
   deferredTargets: string[];
+  answerAlignment?: AnswerAlignment;
+  planningStrategy?: "default" | "advance" | "reframe" | "switch-thread";
 }
 
 export interface EntryAgentSemanticPlanningResult {

@@ -1,6 +1,7 @@
 import type {
   EntryAgentBridgeResult,
   EntryAgentAxisPath,
+  FuliSemanticCanvas,
   EntryAgentResult,
   HighValueField,
   InterpretationCandidate,
@@ -8,13 +9,14 @@ import type {
   SlotStateStatus,
   SlotQuestionMode,
 } from "./types";
+import { getSemanticCanvasQuestionPrompt } from "./semanticCanvas";
 import { getSlotQuestionSpec } from "./slotQuestionSpec";
 
 const MISSING_SLOT_PRIORITY: HighValueField[] = [
-  "overallImpression",
   "colorMood",
   "patternTendency",
   "arrangementTendency",
+  "overallImpression",
   "spaceContext",
 ];
 
@@ -34,7 +36,15 @@ function pickAnchoredMissingField(input: {
   finalResolvedReadings: InterpretationCandidate[];
   updatedSlotStates: Partial<Record<HighValueField, SlotStateStatus>>;
 }) {
-  const rankedAnchors = [...input.finalResolvedReadings].sort((left, right) => right.confidence - left.confidence);
+  const rankedAnchors = [...input.finalResolvedReadings].sort((left, right) => {
+    const leftState = input.updatedSlotStates[left.field];
+    const rightState = input.updatedSlotStates[right.field];
+    const leftCueBonus = left.matchedCues.some((cue) => cue && cue !== left.field) ? 0.08 : 0;
+    const rightCueBonus = right.matchedCues.some((cue) => cue && cue !== right.field) ? 0.08 : 0;
+    const leftImpressionPenalty = left.field === "overallImpression" && (leftState === "weak-signal" || leftState === "tentative") ? 0.06 : 0;
+    const rightImpressionPenalty = right.field === "overallImpression" && (rightState === "weak-signal" || rightState === "tentative") ? 0.06 : 0;
+    return (right.confidence + rightCueBonus - rightImpressionPenalty) - (left.confidence + leftCueBonus - leftImpressionPenalty);
+  });
 
   for (const reading of rankedAnchors) {
     const state = input.updatedSlotStates[reading.field];
@@ -115,10 +125,12 @@ function pickQuestionMode(input: {
 
 export function buildSemanticGaps(input: {
   interpretationMerge: EntryAgentResult["interpretationMerge"];
-  bridge: Pick<EntryAgentBridgeResult, "ambiguities">;
+  bridge: Pick<EntryAgentBridgeResult, "ambiguities" | "semanticCanvas">;
   updatedSlotStates: EntryAgentResult["updatedSlotStates"];
 }): SemanticGap[] {
   const gaps: SemanticGap[] = [];
+  const buildQuestionPromptOverride = (gap: Pick<SemanticGap, "targetField" | "targetSlot">) =>
+    getSemanticCanvasQuestionPrompt(input.bridge.semanticCanvas as FuliSemanticCanvas | undefined, gap);
 
   input.interpretationMerge.mergeGroups
     .filter((group) => group.followUpRequired || group.relation === "conflict")
@@ -153,6 +165,7 @@ export function buildSemanticGaps(input: {
       expectedGain: planning.expectedGain,
       informationGainHint: "用户回答后，可减少两个可主导解释之间谁该成为主方向的不确定性。",
       rankingReason: "主解释存在冲突，优先级高于单纯补 missing slot。",
+      questionPromptOverride: buildQuestionPromptOverride({ targetField, targetSlot: group.primarySlot }),
     });
   });
 
@@ -178,6 +191,10 @@ export function buildSemanticGaps(input: {
       expectedGain: planning.expectedGain,
       informationGainHint: "用户回答后，可减少当前词语在不同槽位或不同读法之间摇摆的不确定性。",
       rankingReason: "当前语义存在未决歧义，需要先确认用户真正想表达的方向。",
+      questionPromptOverride: buildQuestionPromptOverride({
+        targetField: ambiguity.field,
+        targetSlot: mapFieldToSlot(ambiguity.field),
+      }),
     });
   });
 
@@ -207,6 +224,10 @@ export function buildSemanticGaps(input: {
         expectedGain: "确认这个 subtle 方向是否值得稳定保留，而不是只作为弱修饰。",
         informationGainHint: unit.informationGainHint,
         rankingReason: "poetic / retrieval-only cue 只能先作为 weak-anchor，避免弱证据过早主导 narrative。",
+        questionPromptOverride: buildQuestionPromptOverride({
+          targetField: unit.targetField,
+          targetSlot: unit.targetSlot,
+        }),
       });
     });
 
@@ -246,6 +267,10 @@ export function buildSemanticGaps(input: {
       rankingReason: targetReading
         ? "当前已有一个初步方向，优先继续收窄这个 field 的内部语义。"
         : "当前缺少关键槽位 anchor，需要补齐核心风格信息。",
+      questionPromptOverride: buildQuestionPromptOverride({
+        targetField: missingField,
+        targetSlot: mapFieldToSlot(missingField),
+      }),
     });
   }
 

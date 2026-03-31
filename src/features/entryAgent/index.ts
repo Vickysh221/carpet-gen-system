@@ -5,6 +5,7 @@ import { deriveFollowUpRecommendation } from "./followUpRecommendation";
 import { mergeInterpretationCandidates } from "./prototypeMerge";
 import { resolvePrototypeCandidates } from "./prototypeMatching";
 import { buildQuestionPlan } from "./questionPlanning";
+import { buildSemanticCanvas, buildSemanticCanvasCandidates } from "./semanticCanvas";
 import { decomposeSemanticCues } from "./semanticCueDecomposition";
 import { buildSemanticGaps } from "./semanticGapPlanner";
 import { buildSemanticUnderstanding } from "./semanticUnderstanding";
@@ -15,23 +16,36 @@ import type { EntryAgentInput, EntryAgentResult } from "./types";
 export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAgentResult> {
   const detection = detectHighValueFieldHits(input.text);
   const semanticUnits = decomposeSemanticCues(input, detection);
+  const semanticCanvas = await buildSemanticCanvas({
+    text: input.text,
+    detection,
+    semanticUnits,
+  });
+  const semanticCanvasCandidates = buildSemanticCanvasCandidates({
+    semanticCanvas,
+    text: input.text,
+  });
   const directCandidates = buildDirectInterpretationCandidates(input, detection, semanticUnits);
   const { prototypeMatches, candidates: prototypeCandidates } = await resolvePrototypeCandidates(input, detection, semanticUnits);
   const fallback = await buildFallbackCandidateSet({
     text: input.text,
     detection,
+    semanticCanvas,
+    semanticCanvasCandidates,
     directCandidates,
     prototypeMatches,
     prototypeCandidates,
   });
   const interpretationMerge = mergeInterpretationCandidates({
+    semanticCanvas,
+    semanticCanvasCandidates,
     directCandidates,
     prototypeMatches,
     prototypeCandidates,
     semanticUnits,
     fallback,
   });
-  const bridge = buildSemanticToAxisBridge(input, detection, interpretationMerge);
+  const bridge = buildSemanticToAxisBridge(input, detection, interpretationMerge, semanticCanvas);
   const updatedSlotStates = deriveUpdatedSlotStates({
     detection,
     bridge,
@@ -42,8 +56,11 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     bridge,
     updatedSlotStates,
   });
-  const { questionCandidates, questionPlan } = buildQuestionPlan({
+  const { questionCandidates, questionPlan } = await buildQuestionPlan({
     semanticGaps,
+    previousQuestion: input.previousQuestionTrace,
+    bridge,
+    hitFields: detection.hitFields,
   });
   const semanticUnderstanding = buildSemanticUnderstanding({
     interpretationMerge,

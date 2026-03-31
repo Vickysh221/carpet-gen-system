@@ -1,5 +1,5 @@
 import type { AssetSlotAnnotation, FirstOrderSlotValues, SecondOrderSlotValues } from "@/core/assets/types";
-import type { EntryAgentAxisMap, EntryAgentStatePatch, EntryAgentSlotKey, QaMode, HighValueField, EntryAgentResult, WeakBiasHint } from "@/features/entryAgent";
+import type { EntryAgentAxisMap, EntryAgentStatePatch, EntryAgentSlotKey, FuliSemanticCanvas, QaMode, HighValueField, EntryAgentResult, WeakBiasHint } from "@/features/entryAgent";
 import type { SimulatorState } from "@/features/simulator/types";
 
 export type ExplainabilityAxisPath =
@@ -73,18 +73,34 @@ export interface QuestionPlanningSummary {
   llmStatus: string;
   llmSummary: string;
   selectedGapType: string;
+  planningStrategy: string;
+  answerAlignment: string;
   targetFieldLabel: string;
   targetSlotLabel: string;
   targetAxesSummary: string;
   questionModeLabel: string;
   expectedInformationGain: string;
   whyThisQuestion: string;
+  selectedPrompt: string;
+  selectedGapId: string;
+  selectedBecause: string;
+  hitFieldEvidence: string[];
+  semanticGapSummaries: string[];
+  questionCandidateSummaries: string[];
+  deferredTargets: string[];
 }
 
 export interface StateConstructionSummary {
   axisHintSummaries: string[];
   weakBiasSummaries: WeakBiasSummaryItem[];
   appliedDeltaSummaries: string[];
+}
+
+export interface CumulativeCanvasSummary {
+  source: string;
+  rawCues: string[];
+  conceptualAxes: string[];
+  mustPreserve: string[];
 }
 
 export interface PrototypeExplainabilitySummary {
@@ -105,6 +121,7 @@ export interface ConversationStateLogSummary {
   readyToGenerate: boolean;
   interpretation: InterpretationSummary;
   questionPlanning: QuestionPlanningSummary;
+  cumulativeCanvas: CumulativeCanvasSummary;
   prototypeExplainability: PrototypeExplainabilitySummary;
   stateConstruction: StateConstructionSummary;
   deltaExplanation: DeltaExplanationItem[];
@@ -499,6 +516,56 @@ function summarizePrototypeExplainability(analysis: EntryAgentResult): Prototype
   };
 }
 
+function summarizeCumulativeCanvas(canvas: FuliSemanticCanvas | undefined): CumulativeCanvasSummary {
+  return {
+    source: canvas?.source ?? "none",
+    rawCues: canvas?.rawCues.length ? canvas.rawCues : ["none"],
+    conceptualAxes: canvas?.conceptualAxes.length ? canvas.conceptualAxes : ["none"],
+    mustPreserve: canvas?.narrativePolicy.mustPreserve.length ? canvas.narrativePolicy.mustPreserve : ["none"],
+  };
+}
+
+function summarizeHitFieldEvidence(analysis: EntryAgentResult) {
+  if (analysis.hitFields.length === 0) {
+    return ["none"];
+  }
+
+  return analysis.hitFields.map((field) => {
+    const evidence = analysis.evidence[field]?.join(", ") ?? "no direct evidence";
+    const confidence = analysis.confidence[field] ?? "unknown";
+    const slotState = analysis.updatedSlotStates[field] ?? "unknown";
+    return `${getFieldLabel(field)} · evidence: ${evidence} · confidence: ${confidence} · slotState: ${slotState}`;
+  });
+}
+
+function summarizeSemanticGaps(analysis: EntryAgentResult) {
+  if (analysis.semanticGaps.length === 0) {
+    return ["none"];
+  }
+
+  return analysis.semanticGaps.map((gap, index) => {
+    const promptSource = gap.questionPromptOverride ? "override" : "template";
+    const axes = gap.targetAxes.length > 0 ? gap.targetAxes.join(" / ") : "none";
+    return `#${index + 1} · ${gap.type} · ${getFieldLabel(gap.targetField)} · mode ${gap.questionMode ?? "none"} · priority ${gap.priority} · axes ${axes} · source ${promptSource} · reason ${gap.reason}`;
+  });
+}
+
+function summarizeQuestionCandidates(analysis: EntryAgentResult) {
+  if (analysis.questionCandidates.length === 0) {
+    return ["none"];
+  }
+
+  return analysis.questionCandidates.map((candidate, index) => {
+    const selectedMark = analysis.questionPlan?.selectedQuestion.id === candidate.id ? "[selected] " : "";
+    const axes = candidate.targetAxes.length > 0 ? candidate.targetAxes.join(" / ") : "none";
+    return `${selectedMark}#${index + 1} · ${candidate.targetType} · ${getFieldLabel(candidate.targetField)} · mode ${candidate.questionMode ?? "none"} · axes ${axes} · prompt ${candidate.prompt}`;
+  });
+}
+
+function summarizeDeferredTargets(analysis: EntryAgentResult) {
+  return analysis.questionPlan?.deferredTargets.length ? analysis.questionPlan.deferredTargets : ["none"];
+}
+
 export function buildConversationStateLogSummary(input: {
   text: string;
   turnCount: number;
@@ -506,6 +573,7 @@ export function buildConversationStateLogSummary(input: {
   followUpQuestion: string;
   readyToGenerate: boolean;
   analysis: EntryAgentResult;
+  cumulativeCanvas?: FuliSemanticCanvas;
   initialization?: InitializationExplainabilityResult;
 }) {
   const { analysis, initialization } = input;
@@ -537,13 +605,27 @@ export function buildConversationStateLogSummary(input: {
     questionPlanning: {
       ...summarizeLlmFallbackStatus(analysis),
       selectedGapType: analysis.questionPlan?.selectedQuestion.targetType ?? "none",
+      planningStrategy: analysis.questionPlan?.planningStrategy ?? "none",
+      answerAlignment: analysis.questionPlan?.answerAlignment
+        ? `${analysis.questionPlan.answerAlignment.status} · ${analysis.questionPlan.answerAlignment.note}`
+        : "none",
       targetFieldLabel: getFieldLabel(analysis.questionPlan?.selectedTargetField),
       targetSlotLabel: getSlotLabel(analysis.questionPlan?.selectedTargetSlot),
       targetAxesSummary: analysis.questionPlan?.selectedTargetAxes.join(" / ") ?? "none",
       questionModeLabel: getQuestionModeLabel(analysis.questionPlan?.selectedQuestion.questionMode),
       expectedInformationGain: analysis.questionPlan?.selectedQuestion.expectedInformationGain ?? "none",
       whyThisQuestion: analysis.questionPlan?.whyThisQuestion ?? "none",
+      selectedPrompt: analysis.questionPlan?.selectedQuestion.prompt ?? "none",
+      selectedGapId: analysis.questionPlan?.selectedGapId ?? "none",
+      selectedBecause: analysis.questionPlan
+        ? `selected ${analysis.questionPlan.selectedGapId} via ${analysis.questionPlan.planningStrategy ?? "default"}`
+        : "none",
+      hitFieldEvidence: summarizeHitFieldEvidence(analysis),
+      semanticGapSummaries: summarizeSemanticGaps(analysis),
+      questionCandidateSummaries: summarizeQuestionCandidates(analysis),
+      deferredTargets: summarizeDeferredTargets(analysis),
     },
+    cumulativeCanvas: summarizeCumulativeCanvas(input.cumulativeCanvas),
     prototypeExplainability: summarizePrototypeExplainability(analysis),
     stateConstruction: {
       axisHintSummaries: topAxisHints,

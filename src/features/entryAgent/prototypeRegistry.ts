@@ -290,10 +290,10 @@ export const PROTOTYPE_REGISTRY: PrototypeDefinition[] = [
         strength: 0.62,
         confidence: 0.66,
         semanticHints: {
-          colorMood: "subtle-presence",
+          colorMood: "spring-green-subtle",
         },
         axisHints: {
-          color: { saturation: 0.28, warmth: 0.54 },
+          color: { saturation: 0.3, warmth: 0.48 },
           impression: { energy: 0.42, calm: 0.62 },
         },
         patchIntent: {

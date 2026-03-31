@@ -208,12 +208,57 @@ function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary
               <div><span className="font-medium text-stone-800">LLM status:</span> {summary.questionPlanning.llmStatus}</div>
               <div><span className="font-medium text-stone-800">LLM summary:</span> {summary.questionPlanning.llmSummary}</div>
               <div><span className="font-medium text-stone-800">Gap type:</span> {summary.questionPlanning.selectedGapType}</div>
+              <div><span className="font-medium text-stone-800">Planning strategy:</span> {summary.questionPlanning.planningStrategy}</div>
+              <div><span className="font-medium text-stone-800">Answer alignment:</span> {summary.questionPlanning.answerAlignment}</div>
               <div><span className="font-medium text-stone-800">Target field:</span> {summary.questionPlanning.targetFieldLabel}</div>
               <div><span className="font-medium text-stone-800">Target slot:</span> {summary.questionPlanning.targetSlotLabel}</div>
               <div><span className="font-medium text-stone-800">Target axes:</span> {summary.questionPlanning.targetAxesSummary}</div>
               <div><span className="font-medium text-stone-800">Question mode:</span> {summary.questionPlanning.questionModeLabel}</div>
               <div><span className="font-medium text-stone-800">Expected information gain:</span> {summary.questionPlanning.expectedInformationGain}</div>
               <div><span className="font-medium text-stone-800">Why this question:</span> {summary.questionPlanning.whyThisQuestion}</div>
+              <div><span className="font-medium text-stone-800">Selected gap id:</span> {summary.questionPlanning.selectedGapId}</div>
+              <div><span className="font-medium text-stone-800">Selected prompt:</span> {summary.questionPlanning.selectedPrompt}</div>
+              <div><span className="font-medium text-stone-800">Selected because:</span> {summary.questionPlanning.selectedBecause}</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Question trace debug</div>
+            <div className="mt-2 space-y-3 text-sm leading-6 text-stone-700">
+              <div>
+                <div><span className="font-medium text-stone-800">Hit field evidence:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.questionPlanning.hitFieldEvidence.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Semantic gaps ranked:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.questionPlanning.semanticGapSummaries.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Question candidates:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.questionPlanning.questionCandidateSummaries.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Deferred targets:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.questionPlanning.deferredTargets.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Cumulative semantic canvas</div>
+            <div className="mt-2 space-y-2 text-sm leading-6">
+              <div><span className="font-medium text-stone-800">Source:</span> {summary.cumulativeCanvas.source}</div>
+              <div><span className="font-medium text-stone-800">Raw cues:</span> {summary.cumulativeCanvas.rawCues.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Conceptual axes:</span> {summary.cumulativeCanvas.conceptualAxes.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Must preserve:</span> {summary.cumulativeCanvas.mustPreserve.join(" / ")}</div>
             </div>
           </div>
 
@@ -364,6 +409,7 @@ export function SimulatorPage() {
       followUpQuestion: intentSnapshot.followUpQuestion,
       readyToGenerate: intentSnapshot.readyToGenerate,
       analysis: intentSnapshot.analysis,
+      cumulativeCanvas: intentSnapshot.conversationState.cumulativeCanvas,
       initialization: initializationExplainability ?? undefined,
     });
   }, [intentSnapshot, initializationExplainability]);
@@ -436,8 +482,8 @@ export function SimulatorPage() {
     setIsIntentAnalyzing(true);
     try {
       const nextSnapshot = await buildIntentStabilizationSnapshot({
+        previousSnapshot: intentSnapshot,
         previousText: intentSnapshot?.text,
-        previousQuestion: intentSnapshot?.followUpQuestion,
         nextReply: trimmedText,
         previousTurnCount: intentSnapshot?.turnCount ?? 0,
       });

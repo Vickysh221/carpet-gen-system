@@ -2,6 +2,7 @@ import { reduceMergeResultToState } from "./statePatchReducer";
 import type {
   EntryAgentBridgeResult,
   EntryAgentDetectionResult,
+  FuliSemanticCanvas,
   EntryAgentInput,
   InterpretationMergeResult,
   WeakBiasHint,
@@ -18,6 +19,7 @@ function createEmptyBridgeResult(): EntryAgentBridgeResult {
     axisHints: {},
     weakBiasHints: [],
     statePatch: {},
+    semanticCanvas: undefined,
   };
 }
 
@@ -84,6 +86,7 @@ export function buildSemanticToAxisBridge(
   input: Pick<EntryAgentInput, "text">,
   detection: EntryAgentDetectionResult,
   interpretationMerge: InterpretationMergeResult,
+  semanticCanvas?: FuliSemanticCanvas,
 ): EntryAgentBridgeResult {
   const result = createEmptyBridgeResult();
   const context = {
@@ -105,6 +108,7 @@ export function buildSemanticToAxisBridge(
   result.ambiguities = reduced.ambiguities;
   result.axisHints = reduced.axisHints;
   result.statePatch = reduced.statePatch;
+  result.semanticCanvas = semanticCanvas;
 
   return result;
 }

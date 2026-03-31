@@ -99,4 +99,46 @@ export const ENTRY_AGENT_FIXTURES: EntryAgentFixture[] = [
       questionPromptIncludes: ["图案太碎太花", "太几何"],
     },
   },
+  {
+    name: "poetic subtle spring green",
+    input: { text: "草色遥看近却无" },
+    expectation: {
+      hitFields: ["colorMood"],
+      requiredSemanticHints: ["colorMood"],
+      requiredSemanticGapTypes: ["weak-anchor"],
+      selectedTargetField: "colorMood",
+      selectedTargetSlot: "color",
+      questionPromptIncludes: ["绿意", "春天的气息"],
+    },
+  },
+  {
+    name: "spring vivid green presence",
+    input: { text: "春天 鲜艳 明媚 绿意盎然" },
+    expectation: {
+      hitFields: ["colorMood", "overallImpression"],
+      requiredSemanticHints: ["colorMood"],
+      requiredSemanticGapTypes: ["missing-slot"],
+      questionPromptIncludes: ["绿意", "春天的气息"],
+    },
+  },
+  {
+    name: "coffee time atmosphere",
+    input: { text: "咖啡时光" },
+    expectation: {
+      hitFields: ["colorMood"],
+      requiredSemanticHints: ["colorMood"],
+      requiredPrototypeMatches: ["coffee-time"],
+      questionPromptIncludes: ["温度感", "日常陪伴"],
+    },
+  },
+  {
+    name: "showy joyful presence",
+    input: { text: "张扬快乐" },
+    expectation: {
+      hitFields: ["overallImpression"],
+      requiredSemanticHints: ["impression"],
+      selectedTargetField: "overallImpression",
+      questionPromptIncludes: ["快乐有张力", "存在感稍微收一点"],
+    },
+  },
 ];

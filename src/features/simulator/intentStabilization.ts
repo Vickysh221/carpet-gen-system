@@ -1,6 +1,25 @@
-import { analyzeEntryText, type EntryAgentResult, type HighValueField } from "@/features/entryAgent";
+import { analyzeEntryText, type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type QuestionTrace } from "@/features/entryAgent";
 
 const MAX_INTENT_TURNS = 3;
+
+interface AnswerAlignment {
+  status: "initial" | "answered" | "partial" | "shifted";
+  introducedFields: HighValueField[];
+  note: string;
+}
+
+interface TurnSemanticRecord {
+  turnIndex: number;
+  replyText: string;
+  hitFields: HighValueField[];
+  answerAlignment: AnswerAlignment;
+}
+
+interface IntentConversationState {
+  turns: TurnSemanticRecord[];
+  questionHistory: QuestionTrace[];
+  cumulativeCanvas?: FuliSemanticCanvas;
+}
 
 interface IntentUnderstandingSnapshot {
   text: string;
@@ -10,6 +29,7 @@ interface IntentUnderstandingSnapshot {
   readyToGenerate: boolean;
   turnCount: number;
   canAskAnotherQuestion: boolean;
+  conversationState: IntentConversationState;
 }
 
 function joinUserTexts(previousText: string | undefined, nextReply: string) {
@@ -18,6 +38,58 @@ function joinUserTexts(previousText: string | undefined, nextReply: string) {
   }
 
   return `${previousText.trim()} ${nextReply.trim()}`.trim();
+}
+
+function unique<T>(items: T[]) {
+  return [...new Set(items)];
+}
+
+function mergeStringArrays(...values: Array<string[] | undefined>) {
+  return unique(values.flatMap((value) => value ?? []));
+}
+
+function mergeSemanticCanvas(
+  previousCanvas: FuliSemanticCanvas | undefined,
+  nextCanvas: FuliSemanticCanvas | undefined,
+): FuliSemanticCanvas | undefined {
+  if (!previousCanvas) {
+    return nextCanvas;
+  }
+
+  if (!nextCanvas) {
+    return previousCanvas;
+  }
+
+  return {
+    source: previousCanvas.source === nextCanvas.source ? previousCanvas.source : "hybrid",
+    confidence: Number((((previousCanvas.confidence ?? 0.65) + (nextCanvas.confidence ?? 0.72)) / 2).toFixed(2)),
+    rawCues: mergeStringArrays(previousCanvas.rawCues, nextCanvas.rawCues),
+    conceptualAxes: mergeStringArrays(previousCanvas.conceptualAxes, nextCanvas.conceptualAxes),
+    metaphoricDomains: mergeStringArrays(previousCanvas.metaphoricDomains, nextCanvas.metaphoricDomains),
+    designTranslations: {
+      colorIdentity: mergeStringArrays(previousCanvas.designTranslations.colorIdentity, nextCanvas.designTranslations.colorIdentity),
+      colorRestraint: mergeStringArrays(previousCanvas.designTranslations.colorRestraint, nextCanvas.designTranslations.colorRestraint),
+      motifLogic: mergeStringArrays(previousCanvas.designTranslations.motifLogic, nextCanvas.designTranslations.motifLogic),
+      arrangementLogic: mergeStringArrays(previousCanvas.designTranslations.arrangementLogic, nextCanvas.designTranslations.arrangementLogic),
+      impressionTone: mergeStringArrays(previousCanvas.designTranslations.impressionTone, nextCanvas.designTranslations.impressionTone),
+      materialSuggestion: mergeStringArrays(previousCanvas.designTranslations.materialSuggestion, nextCanvas.designTranslations.materialSuggestion),
+      presenceIntensity: mergeStringArrays(previousCanvas.designTranslations.presenceIntensity, nextCanvas.designTranslations.presenceIntensity),
+    },
+    slotMappings: {
+      targetFields: unique([...previousCanvas.slotMappings.targetFields, ...nextCanvas.slotMappings.targetFields]),
+      targetSlots: unique([...previousCanvas.slotMappings.targetSlots, ...nextCanvas.slotMappings.targetSlots]),
+      targetAxes: unique([...previousCanvas.slotMappings.targetAxes, ...nextCanvas.slotMappings.targetAxes]),
+    },
+    narrativePolicy: {
+      mustPreserve: mergeStringArrays(previousCanvas.narrativePolicy.mustPreserve, nextCanvas.narrativePolicy.mustPreserve),
+      mustNotOverLiteralize: mergeStringArrays(previousCanvas.narrativePolicy.mustNotOverLiteralize, nextCanvas.narrativePolicy.mustNotOverLiteralize),
+      directionalDominant: mergeStringArrays(previousCanvas.narrativePolicy.directionalDominant, nextCanvas.narrativePolicy.directionalDominant),
+    },
+    questionImplications: {
+      likelyQuestionKinds: mergeStringArrays(previousCanvas.questionImplications.likelyQuestionKinds, nextCanvas.questionImplications.likelyQuestionKinds),
+      likelyInformationGains: mergeStringArrays(previousCanvas.questionImplications.likelyInformationGains, nextCanvas.questionImplications.likelyInformationGains),
+    },
+  };
 }
 
 function buildOverallUnderstanding(analysis: EntryAgentResult) {
@@ -48,7 +120,11 @@ function buildOverallUnderstanding(analysis: EntryAgentResult) {
   }
 
   if (analysis.hitFields.includes("colorMood") && phrases.length === 0) {
-    if (analysis.provisionalStateHints.colorMood === "earthy") {
+    if (analysis.provisionalStateHints.colorMood === "spring-green") {
+      phrases.push("我先理解成你想让颜色带一点春绿感，而且这层颜色需要被轻轻看见。");
+    } else if (analysis.provisionalStateHints.colorMood === "spring-green-subtle") {
+      phrases.push("我先理解成你想保留一点若有若无的春绿存在，而不是把颜色做得很重。");
+    } else if (analysis.provisionalStateHints.colorMood === "earthy") {
       phrases.push("我先理解成你想让颜色更自然、更温和一点。");
     } else if (analysis.provisionalStateHints.colorMood === "restrained") {
       phrases.push("目前看起来你更希望颜色先收敛一点，不要太跳。");
@@ -137,23 +213,63 @@ function getSemanticUnderstandingNarrative(analysis: EntryAgentResult) {
   return buildOverallUnderstanding(analysis) || analysis.semanticUnderstanding.narrative;
 }
 
-function getSemanticQuestionPrompt(analysis: EntryAgentResult) {
-  return analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
-}
-
-function getNonRepeatingSemanticQuestionPrompt(input: {
+function buildQuestionTrace(input: {
+  selectedPrompt: string;
   analysis: EntryAgentResult;
-  previousQuestion?: string;
-}) {
-  const defaultPrompt = getSemanticQuestionPrompt(input.analysis);
-  const previousQuestion = input.previousQuestion?.trim();
+  turnCount: number;
+}): QuestionTrace | undefined {
+  const selectedQuestion =
+    input.analysis.questionCandidates.find((candidate) => candidate.prompt === input.selectedPrompt) ??
+    input.analysis.questionPlan?.selectedQuestion;
 
-  if (!previousQuestion || previousQuestion !== defaultPrompt) {
-    return defaultPrompt;
+  if (!selectedQuestion) {
+    return undefined;
   }
 
-  const alternative = input.analysis.questionCandidates.find((candidate) => candidate.prompt !== previousQuestion);
-  return alternative?.prompt ?? defaultPrompt;
+  return {
+    turnIndex: input.turnCount,
+    prompt: selectedQuestion.prompt,
+    targetField: selectedQuestion.targetField,
+    targetSlot: selectedQuestion.targetSlot,
+    targetAxes: selectedQuestion.targetAxes,
+    gapId: selectedQuestion.resolvesGapIds[0],
+  };
+}
+
+function buildCumulativeUnderstanding(input: {
+  analysis: EntryAgentResult;
+  cumulativeCanvas?: FuliSemanticCanvas;
+  answerAlignment: AnswerAlignment;
+  turnCount: number;
+}) {
+  const canvas = input.cumulativeCanvas;
+  if (!canvas) {
+    return getSemanticUnderstandingNarrative(input.analysis);
+  }
+
+  const phrases: string[] = [];
+
+  if (canvas.narrativePolicy.mustPreserve.some((cue) => ["绿意", "绿意盎然", "草色", "春意"].includes(cue))) {
+    phrases.push("目前几轮累积下来，主意象稳定落在春绿、轻可见、不是浓重铺满的方向。");
+  } else if (canvas.narrativePolicy.mustNotOverLiteralize.includes("咖啡时光")) {
+    phrases.push("目前几轮累积下来，主意象更像日常陪伴、慢下来、低刺激温度感，而不是一个具体咖啡色方案。");
+  } else if (canvas.narrativePolicy.directionalDominant.some((cue) => ["张扬", "快乐"].includes(cue))) {
+    phrases.push("目前几轮累积下来，主意象偏向快乐、有张力、存在感明确，但还没完全收清楚边界。");
+  } else if (canvas.conceptualAxes.length > 0) {
+    phrases.push(`目前几轮累积下来，主意象主要在往${canvas.conceptualAxes.slice(0, 3).join("、")}的方向收。`);
+  }
+
+  if (input.answerAlignment.status === "shifted") {
+    phrases.push("这一轮用户明显把方向切到了新的语义线程，所以下一句会跟着新意象继续问，而不是重复上一问。");
+  } else if (input.answerAlignment.status === "partial") {
+    phrases.push("这一轮既回应了上一问，也补进了新线索，所以下一句会顺着更强的新线索改写问题。");
+  }
+
+  if (input.analysis.questionPlan?.selectedQuestion.expectedInformationGain) {
+    phrases.push(`下一句会继续收还没完全确认的部分，重点是${input.analysis.questionPlan.selectedQuestion.expectedInformationGain}`);
+  }
+
+  return phrases.join("");
 }
 
 function hasCoreIntentAnchor(analysis: EntryAgentResult) {
@@ -179,34 +295,71 @@ function shouldGenerateNow(analysis: EntryAgentResult, turnCount: number) {
 }
 
 export async function buildIntentStabilizationSnapshot({
+  previousSnapshot,
   previousText,
-  previousQuestion,
   nextReply,
   previousTurnCount = 0,
 }: {
+  previousSnapshot?: IntentUnderstandingSnapshot | null;
   previousText?: string;
-  previousQuestion?: string;
   nextReply: string;
   previousTurnCount?: number;
 }): Promise<IntentUnderstandingSnapshot> {
   const text = joinUserTexts(previousText, nextReply);
   const turnCount = Math.min(previousTurnCount + 1, MAX_INTENT_TURNS);
-  const analysis = await analyzeEntryText({ text });
+  const previousQuestionHistory = previousSnapshot?.conversationState.questionHistory ?? [];
+  const previousQuestion = previousQuestionHistory[previousQuestionHistory.length - 1];
+  const analysis = await analyzeEntryText({
+    text,
+    previousQuestionTrace: previousQuestion,
+  });
+  const answerAlignment = analysis.questionPlan?.answerAlignment ?? {
+    status: "initial",
+    introducedFields: analysis.hitFields,
+    note: "当前没有可用的上一问对齐信息。",
+  };
+  const cumulativeCanvas = mergeSemanticCanvas(previousSnapshot?.conversationState.cumulativeCanvas, analysis.semanticCanvas);
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
+  const selectedPrompt = readyToGenerate
+    ? "我已经有一个初步方向了，我们先进入第一轮看看。"
+    : analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
+  const nextQuestionTrace = readyToGenerate
+    ? undefined
+    : buildQuestionTrace({
+        selectedPrompt,
+        analysis,
+        turnCount,
+      });
+  const conversationState: IntentConversationState = {
+    turns: [
+      ...(previousSnapshot?.conversationState.turns ?? []),
+      {
+        turnIndex: turnCount,
+        replyText: nextReply.trim(),
+        hitFields: analysis.hitFields,
+        answerAlignment,
+      },
+    ],
+    questionHistory: nextQuestionTrace
+      ? [...(previousSnapshot?.conversationState.questionHistory ?? []), nextQuestionTrace]
+      : [...(previousSnapshot?.conversationState.questionHistory ?? [])],
+    cumulativeCanvas,
+  };
 
   return {
     text,
     analysis,
-    currentUnderstanding: getSemanticUnderstandingNarrative(analysis),
-    followUpQuestion: readyToGenerate
-      ? "我已经有一个初步方向了，我们先进入第一轮看看。"
-      : getNonRepeatingSemanticQuestionPrompt({
-          analysis,
-          previousQuestion,
-        }),
+    currentUnderstanding: buildCumulativeUnderstanding({
+      analysis,
+      cumulativeCanvas,
+      answerAlignment,
+      turnCount,
+    }),
+    followUpQuestion: selectedPrompt,
     readyToGenerate,
     turnCount,
     canAskAnotherQuestion: !readyToGenerate && turnCount < MAX_INTENT_TURNS,
+    conversationState,
   };
 }
 

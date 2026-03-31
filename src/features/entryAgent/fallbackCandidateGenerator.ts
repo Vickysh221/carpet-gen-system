@@ -3,6 +3,7 @@ import type {
   EntryAgentDetectionResult,
   EntryAgentInput,
   FallbackCandidateSet,
+  FuliSemanticCanvas,
   InterpretationCandidate,
   PrototypeMatch,
 } from "./types";
@@ -97,6 +98,8 @@ function mapLlmCandidateToInterpretationCandidate(input: {
 function shouldTriggerLlmFallback(input: {
   text: string;
   detection: EntryAgentDetectionResult;
+  semanticCanvas?: FuliSemanticCanvas;
+  semanticCanvasCandidates: InterpretationCandidate[];
   directCandidates: InterpretationCandidate[];
   prototypeMatches: PrototypeMatch[];
   prototypeCandidates: InterpretationCandidate[];
@@ -113,6 +116,10 @@ function shouldTriggerLlmFallback(input: {
   }
 
   reasons.push("默认让 Ollama 参与候选分析，补充语义理解与长尾表达覆盖。");
+
+  if (input.semanticCanvas && input.semanticCanvasCandidates.length > 0) {
+    reasons.push("semantic canvas 已提供主解释框架，fallback 仅补弱候选，不接管主叙事。");
+  }
 
   if (normalized.length >= 4 && input.directCandidates.length === 0 && input.prototypeCandidates.length === 0) {
     reasons.push("输入有语义内容，但 direct / prototype 解释层均未产出候选。");
@@ -137,6 +144,8 @@ function shouldTriggerLlmFallback(input: {
 export async function buildFallbackCandidateSet(
   input: Pick<EntryAgentInput, "text"> & {
     detection: EntryAgentDetectionResult;
+    semanticCanvas?: FuliSemanticCanvas;
+    semanticCanvasCandidates: InterpretationCandidate[];
     directCandidates: InterpretationCandidate[];
     prototypeMatches: PrototypeMatch[];
     prototypeCandidates: InterpretationCandidate[];
@@ -177,6 +186,8 @@ export async function buildFallbackCandidateSet(
   const weakCoverage = shouldTriggerLlmFallback({
     text: input.text,
     detection: input.detection,
+    semanticCanvas: input.semanticCanvas,
+    semanticCanvasCandidates: input.semanticCanvasCandidates,
     directCandidates: input.directCandidates,
     prototypeMatches: input.prototypeMatches,
     prototypeCandidates: input.prototypeCandidates,

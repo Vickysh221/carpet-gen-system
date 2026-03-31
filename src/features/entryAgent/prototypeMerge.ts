@@ -1,5 +1,6 @@
 import type {
   FallbackCandidateSet,
+  FuliSemanticCanvas,
   InterpretationCandidate,
   InterpretationMergeResult,
   MergeDecisionGroup,
@@ -46,14 +47,16 @@ function buildDecision(readingId: string, status: "kept" | "suppressed", mergeRe
 }
 
 export function mergeInterpretationCandidates(input: {
+  semanticCanvas?: FuliSemanticCanvas;
+  semanticCanvasCandidates: InterpretationCandidate[];
   directCandidates: InterpretationCandidate[];
   prototypeMatches: PrototypeMatch[];
   prototypeCandidates: InterpretationCandidate[];
   semanticUnits: SemanticUnit[];
   fallback: FallbackCandidateSet;
 }): InterpretationMergeResult {
-  const { directCandidates, prototypeMatches, prototypeCandidates, semanticUnits, fallback } = input;
-  const candidateReadings = [...directCandidates, ...prototypeCandidates, ...fallback.candidates];
+  const { semanticCanvas, semanticCanvasCandidates, directCandidates, prototypeMatches, prototypeCandidates, semanticUnits, fallback } = input;
+  const candidateReadings = [...semanticCanvasCandidates, ...directCandidates, ...prototypeCandidates, ...fallback.candidates];
   const mergeGroups: MergeDecisionGroup[] = [];
   const keptReadings: ReadingDecision[] = [];
   const suppressedReadings: ReadingDecision[] = [];
@@ -61,6 +64,7 @@ export function mergeInterpretationCandidates(input: {
 
   if (candidateReadings.length === 0) {
     return {
+      semanticCanvasCandidates,
       directCandidates,
       prototypeMatches,
       semanticUnits,
@@ -87,7 +91,9 @@ export function mergeInterpretationCandidates(input: {
       return right.confidence - left.confidence;
     }
 
-    const sourceRank = { direct: 3, prototype: 2, "fallback-candidate": 1 } as const;
+    const sourceRank = semanticCanvas
+      ? { "semantic-canvas": 4, direct: 3, prototype: 1, "fallback-candidate": 0 } as const
+      : { "semantic-canvas": 4, direct: 3, prototype: 2, "fallback-candidate": 1 } as const;
     return sourceRank[right.sourceType] - sourceRank[left.sourceType];
   });
 
@@ -103,6 +109,8 @@ export function mergeInterpretationCandidates(input: {
       prototypeCandidates.length > 0 && directCandidates.length === 0 ? "reinforcement" : "refinement",
       primary.sourceType === "fallback-candidate"
         ? "无 direct/prototype 候选，LLM fallback 成为唯一主解释。"
+        : primary.sourceType === "semantic-canvas"
+          ? "semantic canvas 成为当前主解释，prototype 只保留为辅助证据。"
         : primary.sourceType === "prototype"
           ? "prototype reading 成为当前主解释。"
           : "direct reading 成为当前主解释。",
@@ -167,6 +175,7 @@ export function mergeInterpretationCandidates(input: {
   });
 
   return {
+    semanticCanvasCandidates,
     directCandidates,
     prototypeMatches,
     semanticUnits,

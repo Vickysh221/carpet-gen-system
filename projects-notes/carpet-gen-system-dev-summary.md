@@ -267,3 +267,76 @@ simulator 中支持：
 3. 新的资产层结构变化
 4. 新的重大问题诊断完成
 5. 新的阶段目标切换
+
+---
+
+## 2026-04-01 — intent question planning refactor snapshot
+
+### Problem diagnosed
+intent stabilization 阶段的 `next question` 过于稳定地退回到：
+- `overallImpression`
+- `contrast-calm-vs-presence`
+- 泛化模板问句
+
+典型表现是重复：
+- “如果先只收一个大方向，你更想让它整体偏安静放松，还是保留一点存在感和张力？”
+
+这暴露出来的问题不是单纯 LLM 没调用，而是：
+1. `semanticGapPlanner` 对 `overallImpression` 偏置过强
+2. `slotQuestionSpec` 的 field-level template 过于强势
+3. `questionPlanning` 缺少对用户当前 cue 的承接
+4. 页面缺少足够 trace，导致难以直接看见为什么这句被选中
+
+### Product principle updated
+新的原则不是追求：
+- 百分百精确分类
+
+而是追求：
+- 尽量把用户表达映射到相对近似的槽位
+- 宁可做带误差的近似挂靠，也不要因为不确定就退回抽象总问句
+
+### What changed in code
+本轮已落地：
+
+1. **Question trace debug 面板**
+   - 在 simulator inspect 中显示：
+     - hit field evidence
+     - semantic gap ranking
+     - question candidates
+     - selected gap / selected prompt / deferred targets
+
+2. **Missing-slot priority 调整**
+   - 从 impression-first 改为：
+     - colorMood
+     - patternTendency
+     - arrangementTendency
+     - overallImpression
+     - spaceContext
+
+3. **Anchored field 选择偏置修正**
+   - 增加 `cue bonus`
+   - 增加 `impression penalty`
+   - 避免 impression 靠宽泛解释力吞掉具体线索
+
+4. **Question prompt 改为 cue-grounded 优先**
+   - 如果 gap 里有明确 cue，则优先生成承接用户原词的问题
+   - 不再优先回退到 field-level 的固定模板
+
+5. **Generic prompt penalty**
+   - 对“如果先只收一个大方向……”这类泛化问题降权
+   - 让 planner 更倾向选择有具体承接感的问题
+
+### Main files touched
+- `src/features/simulator/explainability.ts`
+- `src/features/simulator/SimulatorPage.tsx`
+- `src/features/entryAgent/semanticGapPlanner.ts`
+- `src/features/entryAgent/questionPlanning.ts`
+
+### Documentation added
+详细沉淀见：
+- `docs/intent-question-planning-refactor-2026-04-01.md`
+
+### Next likely step
+下一阶段最值得继续做的是：
+- 把 `colorMood / patternTendency / overallImpression` 继续拆成更细的 subgap
+- 让 planner 选的是“field 内部缺口”，而不是只选高层 field
