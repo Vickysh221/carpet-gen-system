@@ -219,6 +219,44 @@ function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary
               <div><span className="font-medium text-stone-800">Selected gap id:</span> {summary.questionPlanning.selectedGapId}</div>
               <div><span className="font-medium text-stone-800">Selected prompt:</span> {summary.questionPlanning.selectedPrompt}</div>
               <div><span className="font-medium text-stone-800">Selected because:</span> {summary.questionPlanning.selectedBecause}</div>
+              <div><span className="font-medium text-stone-800">Selected family:</span> {summary.questionPlanning.selectedQuestionFamily}</div>
+              <div><span className="font-medium text-stone-800">Latest resolution:</span> {summary.questionPlanning.latestResolution}</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Resolution + understanding debug</div>
+            <div className="mt-2 space-y-3 text-sm leading-6 text-stone-700">
+              <div>
+                <div><span className="font-medium text-stone-800">Resolved families:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.questionPlanning.resolvedFamilies.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Latest shift:</span> {summary.understandingSummary.latestShift}</div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Resolved items:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.understandingSummary.resolvedItems.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Active items:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.understandingSummary.activeItems.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Open items:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.understandingSummary.openItems.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Next focus:</span> {summary.understandingSummary.nextFocus}</div>
+              </div>
             </div>
           </div>
 

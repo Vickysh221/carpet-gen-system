@@ -5,11 +5,13 @@ import type {
   EntryAgentResult,
   HighValueField,
   InterpretationCandidate,
+  QuestionResolutionState,
   SemanticGap,
   SlotStateStatus,
   SlotQuestionMode,
 } from "./types";
 import { getSemanticCanvasQuestionPrompt } from "./semanticCanvas";
+import { isGapBlockedByResolution } from "./questionResolution";
 import { getSlotQuestionSpec } from "./slotQuestionSpec";
 
 const MISSING_SLOT_PRIORITY: HighValueField[] = [
@@ -64,6 +66,14 @@ function pickReadingForField(readings: InterpretationCandidate[], field: HighVal
   return [...readings]
     .filter((reading) => reading.field === field)
     .sort((left, right) => right.confidence - left.confidence)[0];
+}
+
+function buildQuestionFamilyId(field: HighValueField | undefined, mode: SlotQuestionMode | undefined, type: SemanticGap["type"]) {
+  if (!field) {
+    return `${type}:unknown`;
+  }
+
+  return `${field}:${mode ?? type}`;
 }
 
 function pickQuestionMode(input: {
@@ -127,6 +137,7 @@ export function buildSemanticGaps(input: {
   interpretationMerge: EntryAgentResult["interpretationMerge"];
   bridge: Pick<EntryAgentBridgeResult, "ambiguities" | "semanticCanvas">;
   updatedSlotStates: EntryAgentResult["updatedSlotStates"];
+  resolutionState?: QuestionResolutionState;
 }): SemanticGap[] {
   const gaps: SemanticGap[] = [];
   const buildQuestionPromptOverride = (gap: Pick<SemanticGap, "targetField" | "targetSlot">) =>
@@ -156,17 +167,18 @@ export function buildSemanticGaps(input: {
         priority: 100 - index,
         targetField,
         targetSlot: group.primarySlot,
-      targetAxes: planning.targetAxes,
-      questionMode: planning.questionMode,
-      questionKind: "contrast",
-      relatedReadingIds: group.participatingReadingIds,
-      reason: group.decision,
-      evidence: [group.decision],
-      expectedGain: planning.expectedGain,
-      informationGainHint: "用户回答后，可减少两个可主导解释之间谁该成为主方向的不确定性。",
-      rankingReason: "主解释存在冲突，优先级高于单纯补 missing slot。",
-      questionPromptOverride: buildQuestionPromptOverride({ targetField, targetSlot: group.primarySlot }),
-    });
+        targetAxes: planning.targetAxes,
+        questionMode: planning.questionMode,
+        questionKind: "contrast",
+        questionFamilyId: buildQuestionFamilyId(targetField, planning.questionMode, "prototype-conflict"),
+        relatedReadingIds: group.participatingReadingIds,
+        reason: group.decision,
+        evidence: [group.decision],
+        expectedGain: planning.expectedGain,
+        informationGainHint: "用户回答后，可减少两个可主导解释之间谁该成为主方向的不确定性。",
+        rankingReason: "主解释存在冲突，优先级高于单纯补 missing slot。",
+        questionPromptOverride: buildQuestionPromptOverride({ targetField, targetSlot: group.primarySlot }),
+      });
   });
 
   input.bridge.ambiguities.forEach((ambiguity, index) => {
@@ -185,6 +197,7 @@ export function buildSemanticGaps(input: {
       targetAxes: planning.targetAxes,
       questionMode: planning.questionMode,
       questionKind: "clarify",
+      questionFamilyId: buildQuestionFamilyId(ambiguity.field, planning.questionMode, "unresolved-ambiguity"),
       relatedReadingIds: [],
       reason: ambiguity.note,
       evidence: [ambiguity.note],
@@ -201,6 +214,12 @@ export function buildSemanticGaps(input: {
   input.interpretationMerge.semanticUnits
     .filter((unit) => unit.cueType === "poetic" || unit.routeHint === "retrieval-entry")
     .forEach((unit, index) => {
+      const weakPlanning = pickQuestionMode({
+        field: unit.targetField,
+        type: "weak-anchor",
+        reason: `${unit.cue} 目前只形成 subtle 弱信号。`,
+        reading: pickReadingForField(input.interpretationMerge.finalResolvedReadings, unit.targetField),
+      });
       gaps.push({
         id: `weak-anchor:${unit.id}`,
         type: "weak-anchor",
@@ -208,13 +227,9 @@ export function buildSemanticGaps(input: {
         targetField: unit.targetField,
         targetSlot: unit.targetSlot,
         targetAxes: unit.disambiguationAxes,
-        questionMode: pickQuestionMode({
-          field: unit.targetField,
-          type: "weak-anchor",
-          reason: `${unit.cue} 目前只形成 subtle 弱信号。`,
-          reading: pickReadingForField(input.interpretationMerge.finalResolvedReadings, unit.targetField),
-        }).questionMode,
+        questionMode: weakPlanning.questionMode,
         questionKind: unit.questionKindHint,
+        questionFamilyId: buildQuestionFamilyId(unit.targetField, weakPlanning.questionMode, "weak-anchor"),
         relatedReadingIds: input.interpretationMerge.candidateReadings
           .filter((reading) => reading.matchedSemanticUnitIds?.includes(unit.id))
           .map((reading) => reading.id),
@@ -255,6 +270,7 @@ export function buildSemanticGaps(input: {
       targetAxes: planning.targetAxes,
       questionMode: planning.questionMode,
       questionKind: targetReading?.questionKindHint ?? "anchor",
+      questionFamilyId: buildQuestionFamilyId(missingField, planning.questionMode, "missing-slot"),
       relatedReadingIds: [],
       reason: targetReading
         ? `${missingField} 已经有初步方向，但内部取向还没收清楚。`
@@ -274,5 +290,7 @@ export function buildSemanticGaps(input: {
     });
   }
 
-  return gaps.sort((left, right) => right.priority - left.priority);
+  return gaps
+    .filter((gap) => !isGapBlockedByResolution(gap, input.resolutionState))
+    .sort((left, right) => right.priority - left.priority);
 }

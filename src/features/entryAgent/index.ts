@@ -5,6 +5,7 @@ import { deriveFollowUpRecommendation } from "./followUpRecommendation";
 import { mergeInterpretationCandidates } from "./prototypeMerge";
 import { resolvePrototypeCandidates } from "./prototypeMatching";
 import { buildQuestionPlan } from "./questionPlanning";
+import { resolvePreviousQuestion } from "./questionResolution";
 import { buildSemanticCanvas, buildSemanticCanvasCandidates } from "./semanticCanvas";
 import { decomposeSemanticCues } from "./semanticCueDecomposition";
 import { buildSemanticGaps } from "./semanticGapPlanner";
@@ -51,16 +52,24 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     bridge,
     previousSlotStates: input.slotStates,
   });
+  const { resolution: latestResolution, resolutionState } = resolvePreviousQuestion({
+    previousQuestion: input.previousQuestionTrace,
+    latestReplyText: input.latestReplyText,
+    previousResolutionState: input.resolutionState,
+  });
   const semanticGaps = buildSemanticGaps({
     interpretationMerge,
     bridge,
     updatedSlotStates,
+    resolutionState,
   });
   const { questionCandidates, questionPlan } = await buildQuestionPlan({
     semanticGaps,
     previousQuestion: input.previousQuestionTrace,
     bridge,
     hitFields: detection.hitFields,
+    resolutionState,
+    latestResolution,
   });
   const semanticUnderstanding = buildSemanticUnderstanding({
     interpretationMerge,
@@ -85,6 +94,8 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     semanticGaps,
     questionCandidates,
     questionPlan,
+    questionResolutionState: questionPlan?.resolutionState ?? resolutionState,
+    latestResolution: questionPlan?.latestResolution ?? latestResolution,
     ...recommendation,
     updatedSlotStates,
   };

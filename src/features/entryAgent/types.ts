@@ -26,6 +26,10 @@ export type QuestionIntent = "resolve-prototype-conflict" | "resolve-ambiguity" 
 
 export type QuestionKind = "contrast" | "clarify" | "anchor" | "strength";
 
+export type QuestionFamilyId = string;
+
+export type QuestionResolutionStatus = "unresolved" | "narrowed" | "resolved" | "rejected";
+
 export type SlotQuestionMode =
   | "contrast-calm-vs-presence"
   | "contrast-soft-vs-crisp"
@@ -222,6 +226,8 @@ export interface EntryAgentInput {
   evidenceSource?: string;
   simulatorState?: SimulatorState;
   previousQuestionTrace?: QuestionTrace;
+  latestReplyText?: string;
+  resolutionState?: QuestionResolutionState;
 }
 
 export interface EntryAgentDetectionResult {
@@ -286,6 +292,7 @@ export interface SemanticGap {
   targetAxes: EntryAgentAxisPath[];
   questionMode?: SlotQuestionMode;
   questionKind?: QuestionKind;
+  questionFamilyId?: QuestionFamilyId;
   relatedReadingIds: string[];
   sourceUnitIds?: string[];
   reason: string;
@@ -305,6 +312,7 @@ export interface NextQuestionCandidate {
   targetAxes: EntryAgentAxisPath[];
   questionMode?: SlotQuestionMode;
   questionKind?: QuestionKind;
+  questionFamilyId?: QuestionFamilyId;
   questionIntent: QuestionIntent;
   prompt: string;
   priority: number;
@@ -320,6 +328,24 @@ export interface QuestionTrace {
   targetSlot?: EntryAgentSlotKey;
   targetAxes: EntryAgentAxisPath[];
   gapId?: string;
+  questionMode?: SlotQuestionMode;
+  questionIntent?: QuestionIntent;
+  questionFamilyId?: QuestionFamilyId;
+}
+
+export interface QuestionResolution {
+  familyId: QuestionFamilyId;
+  status: QuestionResolutionStatus;
+  chosenBranch?: string;
+  rejectedBranches: string[];
+  sourceTurn: number;
+  sourceQuestionGapId?: string;
+  sourceQuestionPrompt: string;
+  reason: string;
+}
+
+export interface QuestionResolutionState {
+  families: Record<QuestionFamilyId, QuestionResolution>;
 }
 
 export interface AnswerAlignment {
@@ -343,6 +369,8 @@ export interface QuestionPlan {
   deferredTargets: string[];
   answerAlignment?: AnswerAlignment;
   planningStrategy?: "default" | "advance" | "reframe" | "switch-thread";
+  resolutionState?: QuestionResolutionState;
+  latestResolution?: QuestionResolution;
 }
 
 export interface EntryAgentSemanticPlanningResult {
@@ -350,6 +378,8 @@ export interface EntryAgentSemanticPlanningResult {
   semanticGaps: SemanticGap[];
   questionCandidates: NextQuestionCandidate[];
   questionPlan?: QuestionPlan;
+  questionResolutionState?: QuestionResolutionState;
+  latestResolution?: QuestionResolution;
 }
 
 export interface EntryAgentResult

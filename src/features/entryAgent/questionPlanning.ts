@@ -1,6 +1,6 @@
 import { activeAnswerAlignmentProvider } from "./answerAlignmentAdapter";
 import { getSlotQuestionSpec } from "./slotQuestionSpec";
-import type { AnswerAlignment, EntryAgentResult, NextQuestionCandidate, HighValueField, QuestionPlan, QuestionTrace, SemanticGap } from "./types";
+import type { AnswerAlignment, EntryAgentResult, NextQuestionCandidate, HighValueField, QuestionPlan, QuestionResolution, QuestionResolutionState, QuestionTrace, SemanticGap } from "./types";
 
 const FIELD_NEIGHBORS: Partial<Record<HighValueField, HighValueField[]>> = {
   overallImpression: ["patternTendency", "arrangementTendency", "colorMood"],
@@ -141,6 +141,7 @@ function buildCandidate(gap: SemanticGap): NextQuestionCandidate {
     targetAxes: gap.targetAxes,
     questionMode: gap.questionMode,
     questionKind: gap.questionKind,
+    questionFamilyId: gap.questionFamilyId,
     questionIntent,
     prompt,
     priority: gap.priority + cueBonus - genericPenalty,
@@ -396,9 +397,12 @@ export async function buildQuestionPlan(input: {
   previousQuestion?: QuestionTrace;
   bridge: Pick<EntryAgentResult, "semanticCanvas">;
   hitFields: EntryAgentResult["hitFields"];
+  resolutionState?: QuestionResolutionState;
+  latestResolution?: QuestionResolution;
 }): Promise<{
   questionCandidates: NextQuestionCandidate[];
   questionPlan?: QuestionPlan;
+  resolutionState?: QuestionResolutionState;
 }> {
   const baseCandidates = input.semanticGaps.map(buildCandidate).sort((left, right) => right.priority - left.priority);
   const answerAlignment = await evaluateAnswerAlignment({
@@ -406,8 +410,17 @@ export async function buildQuestionPlan(input: {
     bridge: input.bridge,
     hitFields: input.hitFields,
   });
+  const resolutionState = input.resolutionState;
+  const resolution = input.latestResolution;
+  const unresolvedCandidates = baseCandidates.filter((candidate) => {
+    if (!candidate.questionFamilyId || !resolutionState) {
+      return true;
+    }
+    const familyResolution = resolutionState.families[candidate.questionFamilyId];
+    return familyResolution?.status !== "resolved";
+  });
   const questionCandidates = rerankQuestionCandidates({
-    questionCandidates: baseCandidates,
+    questionCandidates: unresolvedCandidates,
     previousQuestion: input.previousQuestion,
     answerAlignment,
   });
@@ -421,11 +434,13 @@ export async function buildQuestionPlan(input: {
     return {
       questionCandidates,
       questionPlan: undefined,
+      resolutionState,
     };
   }
 
   return {
     questionCandidates,
+    resolutionState,
     questionPlan: {
       selectedGapId: selectedQuestion.resolvesGapIds[0],
       primaryTargetType: selectedQuestion.targetType,
@@ -439,6 +454,8 @@ export async function buildQuestionPlan(input: {
       deferredTargets: questionCandidates.slice(1).map((item) => item.targetRef),
       answerAlignment,
       planningStrategy,
+      resolutionState,
+      latestResolution: resolution,
     },
   };
 }

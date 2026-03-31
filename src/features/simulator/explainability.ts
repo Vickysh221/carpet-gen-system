@@ -1,5 +1,6 @@
 import type { AssetSlotAnnotation, FirstOrderSlotValues, SecondOrderSlotValues } from "@/core/assets/types";
 import type { EntryAgentAxisMap, EntryAgentStatePatch, EntryAgentSlotKey, FuliSemanticCanvas, QaMode, HighValueField, EntryAgentResult, WeakBiasHint } from "@/features/entryAgent";
+import { buildUnderstandingSummary } from "@/features/simulator/understandingSummary";
 import type { SimulatorState } from "@/features/simulator/types";
 
 export type ExplainabilityAxisPath =
@@ -88,6 +89,9 @@ export interface QuestionPlanningSummary {
   semanticGapSummaries: string[];
   questionCandidateSummaries: string[];
   deferredTargets: string[];
+  selectedQuestionFamily: string;
+  latestResolution: string;
+  resolvedFamilies: string[];
 }
 
 export interface StateConstructionSummary {
@@ -124,6 +128,13 @@ export interface ConversationStateLogSummary {
   cumulativeCanvas: CumulativeCanvasSummary;
   prototypeExplainability: PrototypeExplainabilitySummary;
   stateConstruction: StateConstructionSummary;
+  understandingSummary: {
+    latestShift: string;
+    resolvedItems: string[];
+    activeItems: string[];
+    openItems: string[];
+    nextFocus: string;
+  };
   deltaExplanation: DeltaExplanationItem[];
 }
 
@@ -566,6 +577,28 @@ function summarizeDeferredTargets(analysis: EntryAgentResult) {
   return analysis.questionPlan?.deferredTargets.length ? analysis.questionPlan.deferredTargets : ["none"];
 }
 
+function summarizeLatestResolution(analysis: EntryAgentResult) {
+  const resolution = analysis.latestResolution;
+  if (!resolution) {
+    return "none";
+  }
+
+  return `${resolution.familyId} · ${resolution.status}${resolution.chosenBranch ? ` · ${resolution.chosenBranch}` : ""} · ${resolution.reason}`;
+}
+
+function summarizeResolvedFamilies(analysis: EntryAgentResult) {
+  const families = analysis.questionResolutionState?.families;
+  if (!families) {
+    return ["none"];
+  }
+
+  const items = Object.values(families)
+    .sort((left, right) => right.sourceTurn - left.sourceTurn)
+    .map((item) => `${item.familyId} · ${item.status}${item.chosenBranch ? ` · ${item.chosenBranch}` : ""} · turn ${item.sourceTurn}`);
+
+  return items.length > 0 ? items : ["none"];
+}
+
 export function buildConversationStateLogSummary(input: {
   text: string;
   turnCount: number;
@@ -589,6 +622,7 @@ export function buildConversationStateLogSummary(input: {
           .slice(0, 2)
           .map((item) => item.note)
           .join(" / ")}`;
+  const understandingSummary = buildUnderstandingSummary(analysis);
 
   return {
     userText: input.text,
@@ -624,6 +658,9 @@ export function buildConversationStateLogSummary(input: {
       semanticGapSummaries: summarizeSemanticGaps(analysis),
       questionCandidateSummaries: summarizeQuestionCandidates(analysis),
       deferredTargets: summarizeDeferredTargets(analysis),
+      selectedQuestionFamily: analysis.questionPlan?.selectedQuestion.questionFamilyId ?? "none",
+      latestResolution: summarizeLatestResolution(analysis),
+      resolvedFamilies: summarizeResolvedFamilies(analysis),
     },
     cumulativeCanvas: summarizeCumulativeCanvas(input.cumulativeCanvas),
     prototypeExplainability: summarizePrototypeExplainability(analysis),
@@ -634,6 +671,19 @@ export function buildConversationStateLogSummary(input: {
         deltaExplanation.length > 0
           ? deltaExplanation.map((item) => `${item.summary} · ${item.gloss}`)
           : ["intent stage only; initialization deltas not computed yet"],
+    },
+    understandingSummary: {
+      latestShift: understandingSummary.latestShift ?? "none",
+      resolvedItems: understandingSummary.resolvedItems.length
+        ? understandingSummary.resolvedItems.map((item) => `${item.label} · ${item.detail}`)
+        : ["none"],
+      activeItems: understandingSummary.activeItems.length
+        ? understandingSummary.activeItems.map((item) => `${item.label} · ${item.detail}`)
+        : ["none"],
+      openItems: understandingSummary.openItems.length
+        ? understandingSummary.openItems.map((item) => `${item.label} · ${item.detail}`)
+        : ["none"],
+      nextFocus: understandingSummary.nextFocus ?? "none",
     },
     deltaExplanation,
   } satisfies ConversationStateLogSummary;
