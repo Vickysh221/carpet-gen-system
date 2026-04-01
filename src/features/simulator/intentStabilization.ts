@@ -248,14 +248,20 @@ function buildCumulativeUnderstanding(input: {
 
 
 function shouldGenerateNow(analysis: EntryAgentResult, turnCount: number) {
-  if (turnCount >= HARD_TURN_CAP) return true;
-
-  // Goal-state driven: readyForFirstGeneration covers Condition A and B
+  // Goal-state driven: readyForFirstGeneration is the primary gate.
   if (analysis.intakeGoalState?.readyForFirstGeneration) return true;
 
-  // Soft cap: if we've reached SOFT_TURN_CAP and at least one slot is base-captured
+  // Hard cap no longer forces generation when critical slots are still missing.
+  if (turnCount >= HARD_TURN_CAP) {
+    return analysis.intakeGoalState?.completed ?? false;
+  }
+
+  // Soft cap should not override slot incompleteness.
   if (turnCount >= SOFT_TURN_CAP) {
-    return analysis.intakeGoalState?.slots.some((s) => s.isBaseCaptured) ?? false;
+    const capturedCriticalCount = analysis.intakeGoalState?.slots.filter(
+      (s) => ["impression", "color", "pattern", "arrangement"].includes(s.slot) && s.isBaseCaptured,
+    ).length ?? 0;
+    return capturedCriticalCount >= 2;
   }
 
   return false;

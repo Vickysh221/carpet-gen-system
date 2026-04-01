@@ -221,12 +221,32 @@ function buildMacroSlotState(input: {
   updatedBy: AgentStateUpdateSource;
 }): MacroSlotState {
   const progress = input.analysis.intakeGoalState?.slots.find((item) => item.slot === input.slot);
+  const shouldReusePrevious =
+    Boolean(input.previousSlot) &&
+    (progress?.topScore ?? 0) < input.previousSlot!.topScore &&
+    input.previousSlot!.topScore >= 0.5;
+  const effectiveProgress = shouldReusePrevious
+    ? {
+        topDirection: input.previousSlot?.topDirection,
+        topScore: input.previousSlot?.topScore,
+        supportingSignals: input.previousSlot?.supportingSignals ?? [],
+        phase:
+          input.previousSlot?.status === "soft-locked" || input.previousSlot?.status === "lock-candidate"
+            ? "lock-candidate"
+            : input.previousSlot?.status === "base-ready"
+              ? "base-captured"
+              : input.previousSlot?.status === "hinted"
+                ? "hinted"
+                : "empty",
+        patternIntent: input.previousSlot?.patternIntent,
+      }
+    : progress;
   const status = input.previousSlot?.status === "soft-locked"
     ? "soft-locked"
-    : mapSlotPhaseToStatus(progress?.phase);
+    : mapSlotPhaseToStatus(effectiveProgress?.phase);
   const topCandidates = collectCandidatesForSlot(input.analysis, input.slot);
-  const topDirection = progress?.topDirection ?? topCandidates[0]?.label;
-  const topScore = Number((progress?.topScore ?? topCandidates[0]?.score ?? 0).toFixed(2));
+  const topDirection = effectiveProgress?.topDirection ?? topCandidates[0]?.label;
+  const topScore = Number((effectiveProgress?.topScore ?? topCandidates[0]?.score ?? 0).toFixed(2));
   const questionFamilyIds = input.analysis.semanticGaps
     .filter((gap) => mapFieldToMacroSlot(gap.targetField) === input.slot && gap.questionFamilyId)
     .map((gap) => gap.questionFamilyId as string);
@@ -249,8 +269,8 @@ function buildMacroSlotState(input: {
     questionFamilyIds,
     topDirection,
     topScore,
-    supportingSignals: progress?.supportingSignals ?? topCandidates[0]?.evidence ?? [],
-    patternIntent: progress?.patternIntent,
+    supportingSignals: effectiveProgress?.supportingSignals ?? topCandidates[0]?.evidence ?? [],
+    patternIntent: effectiveProgress?.patternIntent,
   };
 }
 

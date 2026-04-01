@@ -1,6 +1,6 @@
 import { createIntentIntakeAgentState } from "./agentRuntime";
 import { OPENING_OPTION_INDEX } from "./openingOptionRegistry";
-import type { IntentIntakeAgentState, IntakeMacroSlot, MacroSlotState } from "./types";
+import type { IntentIntakeAgentState, IntakeMacroSlot, IntakeSlotProgress, MacroSlotState } from "./types";
 import type {
   OpeningFamily,
   OpeningOptionDefinition,
@@ -122,6 +122,49 @@ function applyPatchToMacroSlotState(currentSlot: MacroSlotState, patch: OpeningS
   };
 }
 
+function mapMacroStatusToGoalPhase(status: MacroSlotState["status"]): IntakeSlotProgress["phase"] {
+  if (status === "soft-locked" || status === "lock-candidate") return "lock-candidate";
+  if (status === "base-ready") return "base-captured";
+  if (status === "hinted") return "hinted";
+  return "empty";
+}
+
+function buildGoalStateFromOpeningSlots(slots: MacroSlotState[]): IntentIntakeAgentState["goalState"] {
+  const progressSlots: IntakeSlotProgress[] = slots.map((slot) => {
+    const phase = mapMacroStatusToGoalPhase(slot.status);
+    return {
+      slot: slot.slot,
+      topDirection: slot.topDirection,
+      topScore: slot.topScore,
+      supportingSignals: slot.supportingSignals,
+      isBaseCaptured: phase === "base-captured" || phase === "lock-candidate",
+      phase,
+      patternIntent: slot.patternIntent,
+    };
+  });
+
+  const criticalSlots: IntakeMacroSlot[] = ["impression", "color", "pattern", "arrangement"];
+  const missingSlots = progressSlots
+    .filter((slot) => criticalSlots.includes(slot.slot) && !slot.isBaseCaptured)
+    .map((slot) => slot.slot);
+  const impression = progressSlots.find((slot) => slot.slot === "impression");
+  const pattern = progressSlots.find((slot) => slot.slot === "pattern");
+  const color = progressSlots.find((slot) => slot.slot === "color");
+  const capturedCount = progressSlots.filter((slot) => criticalSlots.includes(slot.slot) && slot.isBaseCaptured).length;
+  const readyForFirstGeneration =
+    Boolean(impression?.isBaseCaptured && (pattern?.isBaseCaptured || color?.isBaseCaptured)) || capturedCount >= 3;
+
+  return {
+    slots: progressSlots,
+    completed: missingSlots.length === 0,
+    completionReason: missingSlots.length === 0 ? "opening priors already cover all critical macro slots" : undefined,
+    missingSlots,
+    readyForFirstGeneration,
+    firstGenerationReason: readyForFirstGeneration ? "opening priors already form a usable base profile" : undefined,
+    pendingConfirmations: [],
+  };
+}
+
 function buildOpeningNextAction(input: {
   family: OpeningFamily | "mixed";
   suggestedNextTargets: OpeningTargetSlot[];
@@ -159,6 +202,7 @@ export function applyOpeningSelectionToAgentState(input: {
     ...currentState,
     phase: currentState.phase === "idle" ? "text-intake-active" : currentState.phase,
     slots: updatedSlots,
+    goalState: buildGoalStateFromOpeningSlots(updatedSlots),
     nextAction: buildOpeningNextAction({
       family: selections.length === 1 ? selections[0].family : "mixed",
       suggestedNextTargets,

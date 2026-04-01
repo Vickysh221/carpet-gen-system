@@ -154,6 +154,57 @@ function getTopDirectionForSlot(input: { analysis: EntryAgentResult; slot: Intak
     return { label: undefined, score: 0.2, supportingSignals: openGap.evidence.slice(0, 2) };
   }
 
+  const latestResolution = Object.values(analysis.questionResolutionState?.families ?? {})
+    .filter((resolution) => mapFieldToMacroSlot((resolution.familyId.split(":")[0] as HighValueField | undefined)) === slot)
+    .sort((left, right) => right.sourceTurn - left.sourceTurn)[0];
+  if (latestResolution?.chosenBranch) {
+    return {
+      label: latestResolution.chosenBranch,
+      score: latestResolution.status === "resolved" ? 0.78 : 0.62,
+      supportingSignals: [latestResolution.familyId],
+    };
+  }
+
+  if (slot === "impression") {
+    const impression = analysis.provisionalStateHints.impression;
+    if (typeof impression === "string") {
+      return { label: impression, score: 0.64, supportingSignals: ["provisional:impression"] };
+    }
+  }
+
+  if (slot === "color") {
+    const colorMood = analysis.provisionalStateHints.colorMood;
+    if (typeof colorMood === "string") {
+      return { label: colorMood, score: 0.62, supportingSignals: ["provisional:color"] };
+    }
+  }
+
+  if (slot === "arrangement") {
+    const arrangementTendency = analysis.provisionalStateHints.arrangementTendency;
+    if (typeof arrangementTendency === "string") {
+      return { label: arrangementTendency, score: 0.6, supportingSignals: ["provisional:arrangement"] };
+    }
+  }
+
+  if (slot === "space") {
+    const roomType = analysis.provisionalStateHints.roomType;
+    if (typeof roomType === "string") {
+      return { label: roomType, score: 0.7, supportingSignals: ["provisional:space"] };
+    }
+  }
+
+  if (slot === "pattern") {
+    const rawCues = analysis.semanticCanvas?.rawCues ?? [];
+    const patternIntent = extractPatternIntent(rawCues);
+    if (patternIntent?.keyElement) {
+      return {
+        label: patternIntent.keyElement,
+        score: 0.66,
+        supportingSignals: [`pattern:${patternIntent.keyElement}`],
+      };
+    }
+  }
+
   return { label: undefined, score: 0, supportingSignals: [] };
 }
 
@@ -161,16 +212,28 @@ function getTopDirectionForSlot(input: { analysis: EntryAgentResult; slot: Intak
 // Build per-slot progress
 // ---------------------------------------------------------------------------
 
-function buildSlotProgress(analysis: EntryAgentResult, slot: IntakeMacroSlot): IntakeSlotProgress {
+function buildSlotProgress(
+  analysis: EntryAgentResult,
+  slot: IntakeMacroSlot,
+  previousGoalState?: IntentIntakeGoalState,
+): IntakeSlotProgress {
   const top = getTopDirectionForSlot({ analysis, slot });
-  const phase = computePhase(top.score, top.supportingSignals);
+  const previousSlot = previousGoalState?.slots.find((item) => item.slot === slot);
+  const mergedTop = previousSlot && previousSlot.topScore > top.score
+    ? {
+        label: previousSlot.topDirection,
+        score: previousSlot.topScore,
+        supportingSignals: [...new Set([...previousSlot.supportingSignals, ...top.supportingSignals])],
+      }
+    : top;
+  const phase = computePhase(mergedTop.score, mergedTop.supportingSignals);
   const isBaseCaptured = phase === "base-captured" || phase === "lock-candidate";
 
   const result: IntakeSlotProgress = {
     slot,
-    topDirection: top.label,
-    topScore: Number(top.score.toFixed(2)),
-    supportingSignals: top.supportingSignals,
+    topDirection: mergedTop.label,
+    topScore: Number(mergedTop.score.toFixed(2)),
+    supportingSignals: mergedTop.supportingSignals,
     isBaseCaptured,
     phase,
   };
@@ -257,7 +320,7 @@ export function buildIntentIntakeGoalState(
   previousGoalState?: IntentIntakeGoalState,
 ): IntentIntakeGoalState {
   const macroSlots: IntakeMacroSlot[] = ["impression", "color", "pattern", "arrangement", "space"];
-  const slots: IntakeSlotProgress[] = macroSlots.map((slot) => buildSlotProgress(analysis, slot));
+  const slots: IntakeSlotProgress[] = macroSlots.map((slot) => buildSlotProgress(analysis, slot, previousGoalState));
 
   const missingSlots = slots
     .filter((slot) => CRITICAL_SLOTS.includes(slot.slot) && !slot.isBaseCaptured)
