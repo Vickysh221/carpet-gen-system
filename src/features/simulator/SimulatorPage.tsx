@@ -10,7 +10,17 @@ import { MatchedRefInspectPanel } from "./MatchedRefInspectPanel";
 import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSources";
 import { assignDiverseNearestAnnotatedAssets, assignProbingCarriers, findNearestAnnotatedAssets, findExploratoryAnnotatedAssets } from "@/core/assets/matching";
 import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "@/core/assets/types";
-import { type EntryAgentResult, type IntakeMacroSlot, type TextIntakeSignal } from "@/features/entryAgent";
+import {
+  applyOpeningSelectionToAgentState,
+  createIntentIntakeAgentState,
+  getOpeningFamiliesForFirstTurns,
+  OPENING_OPTION_INDEX,
+  type IntentIntakeAgentState,
+  type OpeningQuestionFamilyDefinition,
+  type EntryAgentResult,
+  type IntakeMacroSlot,
+  type TextIntakeSignal,
+} from "@/features/entryAgent";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
 
 const PROBING_ROUND_LIMIT = 3;
@@ -44,6 +54,23 @@ function summarizeEntryAnalysis(analysis: EntryAgentResult) {
     `semantic hints: ${semanticHintsLabel}`,
     `ambiguities: ${analysis.ambiguities.length}`,
   ].join(" · ");
+}
+
+function formatOpeningPromptForPanel(prompt: string) {
+  return prompt.replace(/\s+/g, " ").trim();
+}
+
+function mergeOpeningSelectionText(currentText: string, label: string, allowsMultiple: boolean) {
+  const normalizedCurrent = currentText.trim();
+  if (!allowsMultiple) {
+    return label;
+  }
+
+  const parts = normalizedCurrent
+    ? normalizedCurrent.split(/[+,，、]/).map((part) => part.trim()).filter(Boolean)
+    : [];
+  const nextParts = parts.includes(label) ? parts.filter((part) => part !== label) : [...parts, label];
+  return nextParts.join("，");
 }
 
 function firstOrderFromState(state: SimulatorState): FirstOrderSlotValues {
@@ -184,6 +211,12 @@ function SlotPhasePill({ slot }: { slot: { slot: string; phase: string; topScore
       {slot.topScore > 0 && <span className="ml-0.5 opacity-60">{Math.round(slot.topScore * 100)}%</span>}
     </div>
   );
+}
+
+function mapMacroStatusToDisplayPhase(status: string) {
+  if (status === "base-ready") return "base-captured";
+  if (status === "soft-locked") return "lock-candidate";
+  return status;
 }
 
 function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary: ConversationStateLogSummary; expanded: boolean; onToggle: () => void }) {
@@ -455,6 +488,7 @@ export function SimulatorPage() {
   const [entryText, setEntryText] = useState("");
   const [intentSnapshot, setIntentSnapshot] = useState<IntentUnderstandingSnapshot | null>(null);
   const [entryAnalysis, setEntryAnalysis] = useState<EntryAgentResult | null>(null);
+  const [openingDraftAgentState, setOpeningDraftAgentState] = useState<IntentIntakeAgentState | null>(null);
   const [initializationExplainability, setInitializationExplainability] = useState<InitializationExplainabilityResult | null>(null);
   const [isInspectExpanded, setIsInspectExpanded] = useState(false);
   const [selectedRefInspect, setSelectedRefInspect] = useState<SelectedRefInspectState | null>(null);
@@ -474,6 +508,19 @@ export function SimulatorPage() {
   const roundMode = getRoundMode(round);
   const primarySlot = getPrimarySlot(round);
   const roundExplanation = explainRound(primarySlot, roundMode);
+  const openingFamiliesForFirstTurns = useMemo(
+    () => getOpeningFamiliesForFirstTurns(3).map((family) => ({
+      family,
+      options: family.optionIds
+        .map((id) => OPENING_OPTION_INDEX.get(id))
+        .filter((option): option is NonNullable<typeof option> => Boolean(option)),
+    })),
+    [],
+  );
+  const currentOpeningStep = intentSnapshot?.turnCount ?? 0;
+  const activeOpeningFamily = currentOpeningStep < openingFamiliesForFirstTurns.length
+    ? openingFamiliesForFirstTurns[currentOpeningStep]
+    : undefined;
   const referenceAssets = useMemo(() => getReferenceAssets(assetSourceMode), [assetSourceMode]);
   const effectiveMatchMode = useMemo<"stable" | "explore">(() => {
     if (matchMode === "stable" || matchMode === "explore") return matchMode;
@@ -542,6 +589,7 @@ export function SimulatorPage() {
     setEntryText("");
     setIntentSnapshot(null);
     setEntryAnalysis(null);
+    setOpeningDraftAgentState(null);
     setInitializationExplainability(null);
     setIsInspectExpanded(false);
     setSelectedRefInspect(null);
@@ -559,8 +607,8 @@ export function SimulatorPage() {
     setFeedbackMap((prev) => ({ ...prev, [variantId]: prev[variantId] === value ? undefined as never : value }));
   };
 
-  const handleContinueIntent = async () => {
-    const trimmedText = entryText.trim();
+  const submitIntentText = async (rawText: string) => {
+    const trimmedText = rawText.trim();
 
     if (!trimmedText) {
       setIntentSnapshot(null);
@@ -581,13 +629,37 @@ export function SimulatorPage() {
         previousText: intentSnapshot?.text,
         signal,
         previousTurnCount: intentSnapshot?.turnCount ?? 0,
+        currentAgentStateOverride: openingDraftAgentState ?? undefined,
       });
 
       setIntentSnapshot(nextSnapshot);
       setEntryAnalysis(nextSnapshot.analysis);
+      setOpeningDraftAgentState(nextSnapshot.analysis.agentState ?? null);
       setEntryText("");
     } finally {
       setIsIntentAnalyzing(false);
+    }
+  };
+
+  const handleContinueIntent = async () => {
+    await submitIntentText(entryText);
+  };
+
+  const handleOpeningOptionClick = async (label: string, family: OpeningQuestionFamilyDefinition) => {
+    const selectedOption = activeOpeningFamily?.options.find((option) => option.label === label);
+    if (selectedOption) {
+      const patched = applyOpeningSelectionToAgentState({
+        selections: [selectedOption],
+        currentState: openingDraftAgentState ?? intentSnapshot?.analysis.agentState ?? createIntentIntakeAgentState(),
+      });
+      setOpeningDraftAgentState(patched.updatedAgentState);
+    }
+
+    const nextText = mergeOpeningSelectionText(entryText, label, family.allowsMultiple);
+    setEntryText(nextText);
+
+    if (!family.allowsMultiple) {
+      await submitIntentText(nextText);
     }
   };
 
@@ -732,14 +804,62 @@ export function SimulatorPage() {
                 <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
                   <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Current understanding</div>
                   <div className="mt-2 text-sm leading-6 text-stone-700">
-                    {intentSnapshot?.currentUnderstanding ?? "你先说一句你的直觉，我会先帮你收一个粗方向。"}
+                    {intentSnapshot?.currentUnderstanding ?? "前三轮会依次确认氛围、空间、图案这三条主轴；这一轮先只问一个维度。"}
                   </div>
+                  {!intentSnapshot && openingDraftAgentState && openingDraftAgentState.slots.some((slot) => slot.topScore > 0) && (
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {openingDraftAgentState.slots
+                        .filter((slot) => slot.topScore > 0)
+                        .map((slot) => (
+                          <SlotPhasePill
+                            key={slot.slot}
+                            slot={{
+                              slot: slot.slot,
+                              phase: mapMacroStatusToDisplayPhase(slot.status),
+                              topScore: slot.topScore,
+                              topDirection: slot.topDirection,
+                            }}
+                          />
+                        ))}
+                    </div>
+                  )}
                 </div>
                 <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
                   <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Next question</div>
                   <div className="mt-2 text-sm leading-6 text-stone-700">
-                    {intentSnapshot?.followUpQuestion ?? "我会先抓最值得确认的一点，再问你下一句。"}
+                    {activeOpeningFamily
+                      ? formatOpeningPromptForPanel(activeOpeningFamily.family.prompt)
+                      : (intentSnapshot?.followUpQuestion ?? "我会先抓最值得确认的一点，再问你下一句。")}
                   </div>
+                  {activeOpeningFamily && (
+                    <div className="mt-3">
+                      <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500">
+                        Turn {currentOpeningStep + 1} · {activeOpeningFamily.family.family}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {activeOpeningFamily.options.map((option) => {
+                          const selected = entryText.includes(option.label);
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => void handleOpeningOptionClick(option.label, activeOpeningFamily.family)}
+                              className={`rounded-xl border px-3 py-1.5 text-xs transition ${
+                                selected
+                                  ? "border-stone-900 bg-stone-900 text-white"
+                                  : "border-stone-300 bg-stone-50 text-stone-700 hover:bg-white"
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {activeOpeningFamily.family.allowsMultiple && (
+                        <div className="mt-2 text-xs text-stone-500">可先点 1-2 个选项，它们会直接填入上面的输入框，再点“开始理解”。</div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 {intentSnapshot?.analysis.intakeGoalState && (
                   <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">

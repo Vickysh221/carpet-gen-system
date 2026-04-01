@@ -1,4 +1,4 @@
-import { analyzeEntryText } from "./index";
+import { createIntentIntakeAgentState, decideNextAction, updateAgentStateFromSignal } from "./agentRuntime";
 import type { EntryAgentResult, IntakeSignal, IntakeSignalContext } from "./types";
 
 /**
@@ -23,17 +23,27 @@ export async function processIntakeSignal(
 ): Promise<EntryAgentResult> {
   switch (signal.type) {
     case "text": {
-      // cumulativeText is the full accumulated text (all turns including this one),
-      // computed by the caller. Falls back to signal.text if not provided.
-      const text = context.cumulativeText ?? signal.text.trim();
-      return analyzeEntryText({
-        text,
-        previousQuestionTrace: context.previousQuestionTrace,
-        latestReplyText: signal.text,
-        resolutionState: context.resolutionState,
-        previousGoalState: context.previousGoalState,
-        questionHistory: context.questionHistory,
-      });
+      const seededState = context.currentAgentState
+        ? createIntentIntakeAgentState(context.currentAgentState)
+        : createIntentIntakeAgentState({
+            cumulativeText: context.cumulativeText,
+            resolutionState: context.resolutionState,
+            goalState: context.previousGoalState,
+            previousQuestion: context.previousQuestionTrace,
+            questionHistory: context.questionHistory ?? [],
+          });
+      const agentState = await updateAgentStateFromSignal(signal, seededState);
+      const nextAction = decideNextAction(agentState);
+      const analysis = agentState.latestAnalysis;
+      if (!analysis) {
+        throw new Error('processIntakeSignal: text signal did not produce analysis.');
+      }
+      return {
+        ...analysis,
+        semanticMapping: agentState.latestSemanticMapping,
+        agentState: { ...agentState, nextAction },
+        nextAction,
+      };
     }
 
     case "image-preference":

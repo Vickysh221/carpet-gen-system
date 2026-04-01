@@ -1,4 +1,4 @@
-import { type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
+import { type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeAgentState, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
 import { processIntakeSignal } from "@/features/entryAgent/signalProcessor";
 import { renderPersonaQuestionBridge, renderPersonaUnderstanding } from "./personaRenderer";
 import { buildUnderstandingSummary, renderUnderstandingSummary } from "./understandingSummary";
@@ -221,32 +221,6 @@ function getSemanticUnderstandingNarrative(analysis: EntryAgentResult) {
   return buildOverallUnderstanding(analysis) || analysis.semanticUnderstanding.narrative;
 }
 
-function buildQuestionTrace(input: {
-  selectedPrompt: string;
-  analysis: EntryAgentResult;
-  turnCount: number;
-}): QuestionTrace | undefined {
-  const selectedQuestion =
-    input.analysis.questionCandidates.find((candidate) => candidate.prompt === input.selectedPrompt) ??
-    input.analysis.questionPlan?.selectedQuestion;
-
-  if (!selectedQuestion) {
-    return undefined;
-  }
-
-  return {
-    turnIndex: input.turnCount,
-    prompt: selectedQuestion.prompt,
-    targetField: selectedQuestion.targetField,
-    targetSlot: selectedQuestion.targetSlot,
-    targetAxes: selectedQuestion.targetAxes,
-    gapId: selectedQuestion.resolvesGapIds[0],
-    questionMode: selectedQuestion.questionMode,
-    questionIntent: selectedQuestion.questionIntent,
-    questionFamilyId: selectedQuestion.questionFamilyId,
-  };
-}
-
 function buildCumulativeUnderstanding(input: {
   analysis: EntryAgentResult;
   cumulativeCanvas?: FuliSemanticCanvas;
@@ -292,25 +266,29 @@ export async function buildIntentStabilizationSnapshot({
   previousText,
   signal,
   previousTurnCount = 0,
+  currentAgentStateOverride,
 }: {
   previousSnapshot?: IntentUnderstandingSnapshot | null;
   previousText?: string;
   /** The user's current input as a TextIntakeSignal. */
   signal: TextIntakeSignal;
   previousTurnCount?: number;
+  currentAgentStateOverride?: IntentIntakeAgentState;
 }): Promise<IntentUnderstandingSnapshot> {
   // Accumulate text across turns so the full semantic context is available.
   const text = joinUserTexts(previousText, signal.text);
   const turnCount = Math.min(previousTurnCount + 1, HARD_TURN_CAP);
-  const previousQuestionHistory = previousSnapshot?.conversationState.questionHistory ?? [];
+  const previousAgentState = currentAgentStateOverride ?? previousSnapshot?.analysis.agentState;
+  const previousQuestionHistory = previousAgentState?.questionHistory ?? previousSnapshot?.conversationState.questionHistory ?? [];
   const previousQuestion = previousQuestionHistory[previousQuestionHistory.length - 1];
   // Route through the unified signal-first entry point.
   const analysis = await processIntakeSignal(signal, {
     cumulativeText: text,
+    currentAgentState: previousAgentState,
     previousQuestionTrace: previousQuestion,
-    resolutionState: previousSnapshot?.conversationState.resolutionState,
-    previousGoalState: previousSnapshot?.analysis.intakeGoalState,
-    questionHistory: previousSnapshot?.conversationState.questionHistory,
+    resolutionState: previousAgentState?.resolutionState ?? previousSnapshot?.conversationState.resolutionState,
+    previousGoalState: previousAgentState?.goalState ?? previousSnapshot?.analysis.intakeGoalState,
+    questionHistory: previousQuestionHistory,
   });
   const answerAlignment = analysis.questionPlan?.answerAlignment ?? {
     status: "initial",
@@ -325,13 +303,7 @@ export async function buildIntentStabilizationSnapshot({
   const selectedPrompt = readyToGenerate
     ? rawSelectedPrompt
     : `${renderPersonaQuestionBridge({ analysis, goalState: analysis.intakeGoalState })} ${rawSelectedPrompt}`.trim();
-  const nextQuestionTrace = readyToGenerate
-    ? undefined
-    : buildQuestionTrace({
-        selectedPrompt,
-        analysis,
-        turnCount,
-      });
+  const nextQuestionHistory = analysis.agentState?.questionHistory ?? previousQuestionHistory;
   const conversationState: IntentConversationState = {
     turns: [
       ...(previousSnapshot?.conversationState.turns ?? []),
@@ -342,11 +314,9 @@ export async function buildIntentStabilizationSnapshot({
         answerAlignment,
       },
     ],
-    questionHistory: nextQuestionTrace
-      ? [...(previousSnapshot?.conversationState.questionHistory ?? []), nextQuestionTrace]
-      : [...(previousSnapshot?.conversationState.questionHistory ?? [])],
+    questionHistory: nextQuestionHistory,
     cumulativeCanvas,
-    resolutionState: analysis.questionResolutionState,
+    resolutionState: analysis.agentState?.resolutionState ?? analysis.questionResolutionState,
     lockedSlots: previousSnapshot?.conversationState.lockedSlots ?? {},
   };
 

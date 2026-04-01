@@ -353,6 +353,15 @@ export interface QuestionResolutionState {
 }
 
 export type IntakeMacroSlot = "impression" | "color" | "pattern" | "arrangement" | "space";
+export type IntakePhase =
+  | "idle"
+  | "text-intake-active"
+  | "awaiting-slot-confirmation"
+  | "ready-for-first-generation"
+  | "soft-locked";
+export type MacroSlotStatus = "empty" | "hinted" | "base-ready" | "lock-candidate" | "soft-locked";
+export type MacroSlotTrend = "strengthening" | "weakening" | "stable" | "conflicted";
+export type AgentStateUpdateSource = IntakeSignal["type"] | "bootstrap";
 
 /** Lifecycle phase of a single macro slot during intake. */
 export type IntakeSlotPhase = "empty" | "hinted" | "base-captured" | "lock-candidate";
@@ -391,6 +400,27 @@ export interface IntakeSlotProgress {
   patternIntent?: PatternIntentState;
 }
 
+export interface SlotDirectionCandidate {
+  label: string;
+  score: number;
+  evidence: string[];
+  sourceReadingIds: string[];
+}
+
+export interface MacroSlotState {
+  slot: IntakeMacroSlot;
+  status: MacroSlotStatus;
+  topCandidates: SlotDirectionCandidate[];
+  recentTrend: MacroSlotTrend;
+  lastUpdatedBy?: AgentStateUpdateSource;
+  openBranches: string[];
+  questionFamilyIds: QuestionFamilyId[];
+  topDirection?: string;
+  topScore: number;
+  supportingSignals: string[];
+  patternIntent?: PatternIntentState;
+}
+
 export interface IntentIntakeGoalState {
   slots: IntakeSlotProgress[];
   completed: boolean;
@@ -404,6 +434,139 @@ export interface IntentIntakeGoalState {
    * Consumed by intentStabilization and rendered as a confirmation prompt.
    */
   pendingConfirmations: IntakeSlotConfirmation[];
+}
+
+export interface RawCue {
+  text: string;
+  cueType:
+    | "explicit"
+    | "metaphoric"
+    | "comparative"
+    | "negative-boundary"
+    | "spatial"
+    | "visual-weight";
+  strength: number;
+}
+
+export interface MetaphorNote {
+  sourceCue: string;
+  interpretedAs: string[];
+  uncertaintyNote?: string;
+}
+
+export interface InterpretedIntent {
+  dominantEntryPoint: "space" | "mood" | "pattern-intent" | "color" | "presence";
+  summary: string;
+  designReading: string[];
+  metaphorNotes: MetaphorNote[];
+}
+
+export interface SlotHypothesisBundle {
+  impression?: {
+    topDirections: Array<{ label: string; score: number; evidence: string[] }>;
+    openQuestions: string[];
+  };
+  color?: {
+    warmth?: { top: "warm" | "neutral" | "cool"; score: number };
+    saturation?: { top: "muted" | "visible" | "vivid"; score: number };
+    role?: { top: "atmospheric" | "noticeable"; score: number };
+    evidence: string[];
+    openQuestions: string[];
+  };
+  patternIntent?: {
+    subject?: {
+      candidates: Array<{ label: string; score: number; evidence: string[] }>;
+    };
+    rendering?: { top: string; score: number };
+    abstractionPreference?: { top: "concrete" | "semi-abstract" | "abstract"; score: number };
+    compositionFeeling?: { tags: string[]; score: number };
+    complexity?: { top: "low" | "medium" | "high"; score: number };
+    geometryVsOrganic?: { top: "organic" | "balanced" | "geometric"; score: number };
+    evidence: string[];
+    openQuestions: string[];
+  };
+  arrangement?: {
+    density?: { top: "open" | "balanced" | "dense"; score: number };
+    order?: { top: "free" | "balanced" | "ordered"; score: number };
+    evidence: string[];
+    openQuestions: string[];
+  };
+  space?: {
+    roomType?: { top: "bedroom" | "living-room" | "study" | "office" | "other"; score: number };
+    usageMode?: { tags: string[]; score: number };
+    evidence: string[];
+  };
+  presence?: {
+    blendingMode?: { top: "blended" | "softly-noticeable" | "focal"; score: number };
+    visualWeight?: { top: "light" | "medium" | "strong"; score: number };
+    evidence: string[];
+    openQuestions: string[];
+  };
+}
+
+export interface QuestionOpportunity {
+  targetMacroSlot: "impression" | "color" | "patternIntent" | "arrangement" | "space" | "presence";
+  targetSubslot: string;
+  questionGoal: "disambiguate" | "narrow-branch" | "confirm-base-direction" | "collect-missing-slot";
+  expectedGain: number;
+  suggestedUserFacingAngle: string;
+  basedOnEvidence: string[];
+}
+
+export interface ResolutionHint {
+  familyId: string;
+  status: "unresolved" | "narrowed" | "resolved";
+  chosenBranch?: string;
+  rejectedBranches?: string[];
+  rationale: string;
+}
+
+export interface ConfidenceSummary {
+  macroSlotCoverage: {
+    impression: number;
+    color: number;
+    patternIntent: number;
+    arrangement: number;
+    space: number;
+    presence: number;
+  };
+  baseReadySlots: string[];
+  lockCandidateSlots: string[];
+  missingCriticalSlots: string[];
+  readyForFirstBatch: boolean;
+}
+
+export interface IntentSemanticMapping {
+  rawCues: RawCue[];
+  interpretedIntent: InterpretedIntent;
+  slotHypotheses: SlotHypothesisBundle;
+  questionOpportunities: QuestionOpportunity[];
+  resolutionHints: ResolutionHint[];
+  confidenceSummary: ConfidenceSummary;
+}
+
+export interface AgentNextAction {
+  type: "ask-follow-up-question" | "request-slot-confirmation" | "generate-first-batch" | "hold";
+  reason: string;
+  prompt?: string;
+  targetSlot?: IntakeMacroSlot;
+  targetField?: HighValueField;
+  questionFamilyId?: QuestionFamilyId;
+}
+
+export interface IntentIntakeAgentState {
+  phase: IntakePhase;
+  turnIndex: number;
+  cumulativeText: string;
+  slots: MacroSlotState[];
+  goalState?: IntentIntakeGoalState;
+  resolutionState?: QuestionResolutionState;
+  previousQuestion?: QuestionTrace;
+  questionHistory: QuestionTrace[];
+  latestSemanticMapping?: IntentSemanticMapping;
+  latestAnalysis?: EntryAgentResult;
+  nextAction?: AgentNextAction;
+  lastSignalType?: IntakeSignal["type"];
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +654,7 @@ export interface IntakeSignalContext {
   resolutionState?: QuestionResolutionState;
   /** Previous goal state — passed through for phase-transition detection. */
   previousGoalState?: IntentIntakeGoalState;
+  currentAgentState?: IntentIntakeAgentState;
   /**
    * Previous analysis result — required for image-preference and confirm-direction
    * signals that need to build on the existing semantic state.
@@ -533,6 +697,9 @@ export interface EntryAgentSemanticPlanningResult {
   questionResolutionState?: QuestionResolutionState;
   latestResolution?: QuestionResolution;
   intakeGoalState?: IntentIntakeGoalState;
+  semanticMapping?: IntentSemanticMapping;
+  agentState?: IntentIntakeAgentState;
+  nextAction?: AgentNextAction;
 }
 
 export interface EntryAgentResult
