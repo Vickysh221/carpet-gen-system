@@ -246,48 +246,53 @@ export function buildSemanticGaps(input: {
       });
     });
 
+  // Generate up to 2 missing-slot gaps so the planner has coverage options
   const anchoredField = pickAnchoredMissingField({
     finalResolvedReadings: input.interpretationMerge.finalResolvedReadings,
     updatedSlotStates: input.updatedSlotStates,
   });
   const missingField = anchoredField ?? getMissingField(input.updatedSlotStates);
-  if (missingField) {
-    const targetReading = pickReadingForField(input.interpretationMerge.finalResolvedReadings, missingField);
+
+  function pushMissingSlotGap(field: HighValueField, basePriority: number) {
+    const targetReading = pickReadingForField(input.interpretationMerge.finalResolvedReadings, field);
     const planning = pickQuestionMode({
-      field: missingField,
+      field,
       type: "missing-slot",
-      reason: targetReading
-        ? `${missingField} 已经有初步方向，但内部取向还没收清楚。`
-        : `${missingField} 还没有稳定 anchor。`,
+      reason: targetReading ? `${field} 已经有初步方向，但内部取向还没收清楚。` : `${field} 还没有稳定 anchor。`,
       reading: targetReading,
     });
     gaps.push({
-      id: `missing-slot:${missingField}`,
+      id: `missing-slot:${field}`,
       type: "missing-slot",
-      priority: 40,
-      targetField: missingField,
-      targetSlot: mapFieldToSlot(missingField),
+      priority: basePriority,
+      targetField: field,
+      targetSlot: mapFieldToSlot(field),
       targetAxes: planning.targetAxes,
       questionMode: planning.questionMode,
       questionKind: targetReading?.questionKindHint ?? "anchor",
-      questionFamilyId: buildQuestionFamilyId(missingField, planning.questionMode, "missing-slot"),
+      questionFamilyId: buildQuestionFamilyId(field, planning.questionMode, "missing-slot"),
       relatedReadingIds: [],
-      reason: targetReading
-        ? `${missingField} 已经有初步方向，但内部取向还没收清楚。`
-        : `${missingField} 还没有稳定 anchor。`,
-      evidence: [missingField],
+      reason: targetReading ? `${field} 已经有初步方向，但内部取向还没收清楚。` : `${field} 还没有稳定 anchor。`,
+      evidence: [field],
       expectedGain: planning.expectedGain,
       informationGainHint:
-        targetReading?.informationGainHint ??
-        `用户回答后，可减少 ${missingField} 当前还没有稳定 anchor 的不确定性。`,
+        targetReading?.informationGainHint ?? `用户回答后，可减少 ${field} 当前还没有稳定 anchor 的不确定性。`,
       rankingReason: targetReading
         ? "当前已有一个初步方向，优先继续收窄这个 field 的内部语义。"
         : "当前缺少关键槽位 anchor，需要补齐核心风格信息。",
-      questionPromptOverride: buildQuestionPromptOverride({
-        targetField: missingField,
-        targetSlot: mapFieldToSlot(missingField),
-      }),
+      questionPromptOverride: buildQuestionPromptOverride({ targetField: field, targetSlot: mapFieldToSlot(field) }),
     });
+  }
+
+  if (missingField) {
+    pushMissingSlotGap(missingField, 40);
+    // Second gap: find the next uncovered field for coverage balance
+    const secondMissingField = MISSING_SLOT_PRIORITY.find(
+      (f) => f !== missingField && (input.updatedSlotStates[f] === undefined || input.updatedSlotStates[f] === "unknown"),
+    );
+    if (secondMissingField) {
+      pushMissingSlotGap(secondMissingField, 28);
+    }
   }
 
   return gaps

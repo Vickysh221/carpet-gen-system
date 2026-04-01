@@ -10,7 +10,7 @@ import { MatchedRefInspectPanel } from "./MatchedRefInspectPanel";
 import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSources";
 import { assignDiverseNearestAnnotatedAssets, assignProbingCarriers, findNearestAnnotatedAssets, findExploratoryAnnotatedAssets } from "@/core/assets/matching";
 import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "@/core/assets/types";
-import { analyzeEntryText, type EntryAgentResult } from "@/features/entryAgent";
+import { type EntryAgentResult, type IntakeMacroSlot, type TextIntakeSignal } from "@/features/entryAgent";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
 
 const PROBING_ROUND_LIMIT = 3;
@@ -148,6 +148,40 @@ function RefAssetCard({ asset }: { asset: AnnotatedAssetRecord & { distance: num
     <div className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
       <div className="h-36 overflow-hidden bg-stone-100"><img src={asset.imageUrl} alt={asset.title} className="h-full w-full object-cover" loading="lazy" /></div>
       <div className="p-3"><div className="flex items-center justify-between gap-3 text-xs text-stone-700"><span className="truncate font-medium text-stone-800">{asset.title}</span><span className="shrink-0 text-stone-500">dist {asset.distance.toFixed(2)}</span></div></div>
+    </div>
+  );
+}
+
+const SLOT_PHASE_COLORS: Record<string, string> = {
+  empty: "bg-stone-100 text-stone-400",
+  hinted: "bg-stone-200 text-stone-600",
+  "base-captured": "bg-emerald-100 text-emerald-700",
+  "lock-candidate": "bg-amber-100 text-amber-700",
+};
+const SLOT_PHASE_LABELS: Record<string, string> = {
+  empty: "空",
+  hinted: "有线索",
+  "base-captured": "初步确认",
+  "lock-candidate": "待锁定",
+};
+const SLOT_NAME_LABELS: Record<string, string> = {
+  impression: "氛围",
+  color: "颜色",
+  pattern: "图案",
+  arrangement: "排布",
+  space: "空间",
+};
+
+function SlotPhasePill({ slot }: { slot: { slot: string; phase: string; topScore: number; topDirection?: string } }) {
+  const label = SLOT_NAME_LABELS[slot.slot] ?? slot.slot;
+  const phaseLabel = SLOT_PHASE_LABELS[slot.phase] ?? slot.phase;
+  const colorClass = SLOT_PHASE_COLORS[slot.phase] ?? "bg-stone-100 text-stone-500";
+  return (
+    <div className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${colorClass}`} title={slot.topDirection}>
+      <span>{label}</span>
+      <span className="opacity-60">·</span>
+      <span>{phaseLabel}</span>
+      {slot.topScore > 0 && <span className="ml-0.5 opacity-60">{Math.round(slot.topScore * 100)}%</span>}
     </div>
   );
 }
@@ -434,6 +468,7 @@ export function SimulatorPage() {
   const [rejectedRefIds, setRejectedRefIds] = useState<string[]>([]);
   const [assetPoolExhausted, setAssetPoolExhausted] = useState(false);
   const [isIntentAnalyzing, setIsIntentAnalyzing] = useState(false);
+  const [dismissedConfirmationSlots, setDismissedConfirmationSlots] = useState<IntakeMacroSlot[]>([]);
 
   const feedbackRecords = useMemo<FeedbackRecord[]>(() => Object.entries(feedbackMap).map(([variantId, value]) => ({ variantId, value })), [feedbackMap]);
   const roundMode = getRoundMode(round);
@@ -517,6 +552,7 @@ export function SimulatorPage() {
     setSeenRefIds([]);
     setRejectedRefIds([]);
     setAssetPoolExhausted(false);
+    setDismissedConfirmationSlots([]);
   };
 
   const handleFeedback = (variantId: string, value: "liked" | "disliked") => {
@@ -534,10 +570,16 @@ export function SimulatorPage() {
 
     setIsIntentAnalyzing(true);
     try {
+      const signal: TextIntakeSignal = {
+        type: "text",
+        text: trimmedText,
+        turnIndex: (intentSnapshot?.turnCount ?? 0) + 1,
+        source: "user",
+      };
       const nextSnapshot = await buildIntentStabilizationSnapshot({
         previousSnapshot: intentSnapshot,
         previousText: intentSnapshot?.text,
-        nextReply: trimmedText,
+        signal,
         previousTurnCount: intentSnapshot?.turnCount ?? 0,
       });
 
@@ -547,6 +589,23 @@ export function SimulatorPage() {
     } finally {
       setIsIntentAnalyzing(false);
     }
+  };
+
+  const handleConfirmDirection = (slot: IntakeMacroSlot, choice: "confirm" | "defer") => {
+    if (choice === "confirm" && intentSnapshot) {
+      const confirmation = intentSnapshot.analysis.intakeGoalState?.pendingConfirmations.find((c) => c.slot === slot);
+      setIntentSnapshot((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          conversationState: {
+            ...prev.conversationState,
+            lockedSlots: { ...prev.conversationState.lockedSlots, [slot]: confirmation?.direction ?? "" },
+          },
+        };
+      });
+    }
+    setDismissedConfirmationSlots((prev) => [...prev, slot]);
   };
 
   const handleStartFromText = () => {
@@ -662,7 +721,7 @@ export function SimulatorPage() {
                   <Play className="h-4 w-4" /> 进入探索
                 </button>
                 <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-500">
-                  最多 3 轮，最快 2 轮进入探索。
+                  最多 7 轮，方向够稳后即可进入探索。
                 </div>
               </div>
             </div>
@@ -682,6 +741,50 @@ export function SimulatorPage() {
                     {intentSnapshot?.followUpQuestion ?? "我会先抓最值得确认的一点，再问你下一句。"}
                   </div>
                 </div>
+                {intentSnapshot?.analysis.intakeGoalState && (
+                  <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">槽位进度</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {intentSnapshot.analysis.intakeGoalState.slots.map((slot) => (
+                        <SlotPhasePill key={slot.slot} slot={slot} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(() => {
+                  const pending = (intentSnapshot?.analysis.intakeGoalState?.pendingConfirmations ?? []).filter(
+                    (c) => !dismissedConfirmationSlots.includes(c.slot),
+                  );
+                  if (pending.length === 0) return null;
+                  return (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">需要确认方向</div>
+                      <div className="space-y-3">
+                        {pending.map((confirmation) => (
+                          <div key={confirmation.slot}>
+                            <div className="text-sm leading-5 text-stone-700">{confirmation.prompt}</div>
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmDirection(confirmation.slot, "confirm")}
+                                className="rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-medium text-white"
+                              >
+                                确认方向
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmDirection(confirmation.slot, "defer")}
+                                className="rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700"
+                              >
+                                先看其他
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
                   <div className="mb-1">
                     分析状态：
@@ -689,7 +792,7 @@ export function SimulatorPage() {
                       {isIntentAnalyzing ? "analyzing with semantic pipeline..." : conversationStateLogSummary?.questionPlanning.llmStatus ?? "waiting for input"}
                     </span>
                   </div>
-                  当前轮次：{intentSnapshot?.turnCount ?? 0}/3
+                  当前轮次：{intentSnapshot?.turnCount ?? 0}/5
                   <div className="mt-1">
                     {intentSnapshot?.readyToGenerate
                       ? "当前方向已经足够粗稳，可以进入第一轮探索。"

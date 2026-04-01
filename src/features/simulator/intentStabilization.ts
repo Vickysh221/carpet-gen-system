@@ -1,8 +1,11 @@
-import { analyzeEntryText, type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type QuestionTrace } from "@/features/entryAgent";
+import { type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
+import { processIntakeSignal } from "@/features/entryAgent/signalProcessor";
 import { renderPersonaQuestionBridge, renderPersonaUnderstanding } from "./personaRenderer";
 import { buildUnderstandingSummary, renderUnderstandingSummary } from "./understandingSummary";
 
-const MAX_INTENT_TURNS = 3;
+/** Goal-state drives generation; turn counts are safety caps only. */
+const SOFT_TURN_CAP = 5;
+const HARD_TURN_CAP = 7;
 
 interface AnswerAlignment {
   status: "initial" | "answered" | "partial" | "shifted";
@@ -22,6 +25,8 @@ interface IntentConversationState {
   questionHistory: QuestionTrace[];
   cumulativeCanvas?: FuliSemanticCanvas;
   resolutionState?: EntryAgentResult["questionResolutionState"];
+  /** Slots confirmed by the user via confirm-direction signal. */
+  lockedSlots: Partial<Record<IntakeMacroSlot, string>>;
 }
 
 interface IntentUnderstandingSnapshot {
@@ -267,48 +272,45 @@ function buildCumulativeUnderstanding(input: {
   return getSemanticUnderstandingNarrative(input.analysis);
 }
 
-function hasCoreIntentAnchor(analysis: EntryAgentResult) {
-  const hasImpression = analysis.updatedSlotStates.overallImpression === "tentative";
-  const hasVisualAnchor =
-    analysis.updatedSlotStates.patternTendency === "tentative" ||
-    analysis.updatedSlotStates.colorMood === "tentative" ||
-    analysis.updatedSlotStates.arrangementTendency === "tentative";
-
-  return hasImpression && hasVisualAnchor;
-}
 
 function shouldGenerateNow(analysis: EntryAgentResult, turnCount: number) {
-  if (turnCount >= MAX_INTENT_TURNS) {
-    return true;
+  if (turnCount >= HARD_TURN_CAP) return true;
+
+  // Goal-state driven: readyForFirstGeneration covers Condition A and B
+  if (analysis.intakeGoalState?.readyForFirstGeneration) return true;
+
+  // Soft cap: if we've reached SOFT_TURN_CAP and at least one slot is base-captured
+  if (turnCount >= SOFT_TURN_CAP) {
+    return analysis.intakeGoalState?.slots.some((s) => s.isBaseCaptured) ?? false;
   }
 
-  if (turnCount < 2) {
-    return false;
-  }
-
-  return hasCoreIntentAnchor(analysis);
+  return false;
 }
 
 export async function buildIntentStabilizationSnapshot({
   previousSnapshot,
   previousText,
-  nextReply,
+  signal,
   previousTurnCount = 0,
 }: {
   previousSnapshot?: IntentUnderstandingSnapshot | null;
   previousText?: string;
-  nextReply: string;
+  /** The user's current input as a TextIntakeSignal. */
+  signal: TextIntakeSignal;
   previousTurnCount?: number;
 }): Promise<IntentUnderstandingSnapshot> {
-  const text = joinUserTexts(previousText, nextReply);
-  const turnCount = Math.min(previousTurnCount + 1, MAX_INTENT_TURNS);
+  // Accumulate text across turns so the full semantic context is available.
+  const text = joinUserTexts(previousText, signal.text);
+  const turnCount = Math.min(previousTurnCount + 1, HARD_TURN_CAP);
   const previousQuestionHistory = previousSnapshot?.conversationState.questionHistory ?? [];
   const previousQuestion = previousQuestionHistory[previousQuestionHistory.length - 1];
-  const analysis = await analyzeEntryText({
-    text,
+  // Route through the unified signal-first entry point.
+  const analysis = await processIntakeSignal(signal, {
+    cumulativeText: text,
     previousQuestionTrace: previousQuestion,
-    latestReplyText: nextReply,
     resolutionState: previousSnapshot?.conversationState.resolutionState,
+    previousGoalState: previousSnapshot?.analysis.intakeGoalState,
+    questionHistory: previousSnapshot?.conversationState.questionHistory,
   });
   const answerAlignment = analysis.questionPlan?.answerAlignment ?? {
     status: "initial",
@@ -335,7 +337,7 @@ export async function buildIntentStabilizationSnapshot({
       ...(previousSnapshot?.conversationState.turns ?? []),
       {
         turnIndex: turnCount,
-        replyText: nextReply.trim(),
+        replyText: signal.text.trim(),
         hitFields: analysis.hitFields,
         answerAlignment,
       },
@@ -345,6 +347,7 @@ export async function buildIntentStabilizationSnapshot({
       : [...(previousSnapshot?.conversationState.questionHistory ?? [])],
     cumulativeCanvas,
     resolutionState: analysis.questionResolutionState,
+    lockedSlots: previousSnapshot?.conversationState.lockedSlots ?? {},
   };
 
   return {
@@ -359,7 +362,7 @@ export async function buildIntentStabilizationSnapshot({
     followUpQuestion: selectedPrompt,
     readyToGenerate,
     turnCount,
-    canAskAnotherQuestion: !readyToGenerate && turnCount < MAX_INTENT_TURNS,
+    canAskAnotherQuestion: !readyToGenerate && turnCount < HARD_TURN_CAP,
     conversationState,
   };
 }

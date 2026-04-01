@@ -67,6 +67,7 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
   const { questionCandidates, questionPlan } = await buildQuestionPlan({
     semanticGaps,
     previousQuestion: input.previousQuestionTrace,
+    questionHistory: input.questionHistory,
     bridge,
     hitFields: detection.hitFields,
     resolutionState,
@@ -86,7 +87,8 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     semanticGaps,
     questionPlan,
   });
-  const intakeGoalState = buildIntentIntakeGoalState({
+  // Build the full analysis result first so intakeGoalState can use it
+  const partialResult = {
     ...detection,
     interpretationMerge,
     ...bridge,
@@ -96,24 +98,12 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     questionPlan,
     questionResolutionState: questionPlan?.resolutionState ?? resolutionState,
     latestResolution: questionPlan?.latestResolution ?? latestResolution,
-    ...recommendation,
-    updatedSlotStates,
-  });
-
-  return {
-    ...detection,
-    interpretationMerge,
-    ...bridge,
-    semanticUnderstanding,
-    semanticGaps,
-    questionCandidates,
-    questionPlan,
-    questionResolutionState: questionPlan?.resolutionState ?? resolutionState,
-    latestResolution: questionPlan?.latestResolution ?? latestResolution,
-    intakeGoalState,
     ...recommendation,
     updatedSlotStates,
   };
+  const intakeGoalState = buildIntentIntakeGoalState(partialResult, input.previousGoalState);
+
+  return { ...partialResult, intakeGoalState };
 }
 
 export * from "./types";

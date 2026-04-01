@@ -1,3 +1,4 @@
+import type { TextIntakeSignal } from "@/features/entryAgent";
 import { buildIntentStabilizationSnapshot } from "../intentStabilization";
 
 interface MultiTurnSpecResult {
@@ -6,15 +7,19 @@ interface MultiTurnSpecResult {
   checks: Record<string, boolean>;
 }
 
+function makeTextSignal(text: string, turnIndex: number): TextIntakeSignal {
+  return { type: "text", text, turnIndex, source: "user" };
+}
+
 async function runThreadSwitchCase() {
   const first = await buildIntentStabilizationSnapshot({
-    nextReply: "想安静一点",
+    signal: makeTextSignal("想安静一点", 1),
   });
 
   const second = await buildIntentStabilizationSnapshot({
     previousSnapshot: first,
     previousText: first.text,
-    nextReply: "春天 鲜艳 明媚 绿意盎然",
+    signal: makeTextSignal("春天 鲜艳 明媚 绿意盎然", first.turnCount + 1),
     previousTurnCount: first.turnCount,
   });
 
@@ -32,13 +37,13 @@ async function runThreadSwitchCase() {
 
 async function runAdvanceCase() {
   const first = await buildIntentStabilizationSnapshot({
-    nextReply: "草色遥看近却无",
+    signal: makeTextSignal("草色遥看近却无", 1),
   });
 
   const second = await buildIntentStabilizationSnapshot({
     previousSnapshot: first,
     previousText: first.text,
-    nextReply: "颜色本身要被轻轻看见",
+    signal: makeTextSignal("颜色本身要被轻轻看见", first.turnCount + 1),
     previousTurnCount: first.turnCount,
   });
 
@@ -58,18 +63,18 @@ async function runAdvanceCase() {
 
 async function runCumulativeCanvasCase() {
   const first = await buildIntentStabilizationSnapshot({
-    nextReply: "草色遥看近却无",
+    signal: makeTextSignal("草色遥看近却无", 1),
   });
   const second = await buildIntentStabilizationSnapshot({
     previousSnapshot: first,
     previousText: first.text,
-    nextReply: "想要春天那种明媚",
+    signal: makeTextSignal("想要春天那种明媚", first.turnCount + 1),
     previousTurnCount: first.turnCount,
   });
   const third = await buildIntentStabilizationSnapshot({
     previousSnapshot: second,
     previousText: second.text,
-    nextReply: "但不要很浓很满",
+    signal: makeTextSignal("但不要很浓很满", second.turnCount + 1),
     previousTurnCount: second.turnCount,
   });
 

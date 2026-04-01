@@ -2,6 +2,12 @@ import { activeAnswerAlignmentProvider } from "./answerAlignmentAdapter";
 import { getSlotQuestionSpec } from "./slotQuestionSpec";
 import type { AnswerAlignment, EntryAgentResult, NextQuestionCandidate, HighValueField, QuestionPlan, QuestionResolution, QuestionResolutionState, QuestionTrace, SemanticGap } from "./types";
 
+/** Fields that must be covered in first 3 turns of dialogue. */
+const INITIAL_COVERAGE_FIELDS: HighValueField[] = ["overallImpression", "patternTendency", "spaceContext"];
+const COVERAGE_BOOST = 18;
+const REPEAT_PENALTY_THRESHOLD = 2; // same field asked this many times → penalty
+const REPEAT_PENALTY = 20;
+
 const FIELD_NEIGHBORS: Partial<Record<HighValueField, HighValueField[]>> = {
   overallImpression: ["patternTendency", "arrangementTendency", "colorMood"],
   patternTendency: ["arrangementTendency", "overallImpression", "colorMood"],
@@ -392,9 +398,43 @@ function selectQuestionCandidate(input: {
   };
 }
 
+/**
+ * Boost candidates targeting fields not yet covered in dialogue.
+ * Penalty for fields asked too many times.
+ */
+function applyCoverageBalance(
+  candidates: NextQuestionCandidate[],
+  hitFields: HighValueField[],
+  questionHistory: QuestionTrace[],
+): NextQuestionCandidate[] {
+  const uncoveredCritical = INITIAL_COVERAGE_FIELDS.filter((f) => !hitFields.includes(f));
+
+  // Count how many times each field was asked in history
+  const fieldAskCount = new Map<string, number>();
+  for (const trace of questionHistory) {
+    if (trace.targetField) {
+      fieldAskCount.set(trace.targetField, (fieldAskCount.get(trace.targetField) ?? 0) + 1);
+    }
+  }
+
+  return candidates.map((candidate) => {
+    let delta = 0;
+    if (candidate.targetField && uncoveredCritical.includes(candidate.targetField)) {
+      delta += COVERAGE_BOOST;
+    }
+    const askCount = candidate.targetField ? (fieldAskCount.get(candidate.targetField) ?? 0) : 0;
+    if (askCount >= REPEAT_PENALTY_THRESHOLD) {
+      delta -= REPEAT_PENALTY * (askCount - REPEAT_PENALTY_THRESHOLD + 1);
+    }
+    if (delta === 0) return candidate;
+    return { ...candidate, priority: candidate.priority + delta };
+  });
+}
+
 export async function buildQuestionPlan(input: {
   semanticGaps: SemanticGap[];
   previousQuestion?: QuestionTrace;
+  questionHistory?: QuestionTrace[];
   bridge: Pick<EntryAgentResult, "semanticCanvas">;
   hitFields: EntryAgentResult["hitFields"];
   resolutionState?: QuestionResolutionState;
@@ -404,7 +444,8 @@ export async function buildQuestionPlan(input: {
   questionPlan?: QuestionPlan;
   resolutionState?: QuestionResolutionState;
 }> {
-  const baseCandidates = input.semanticGaps.map(buildCandidate).sort((left, right) => right.priority - left.priority);
+  const rawCandidates = input.semanticGaps.map(buildCandidate).sort((left, right) => right.priority - left.priority);
+  const baseCandidates = applyCoverageBalance(rawCandidates, input.hitFields, input.questionHistory ?? []);
   const answerAlignment = await evaluateAnswerAlignment({
     previousQuestion: input.previousQuestion,
     bridge: input.bridge,
