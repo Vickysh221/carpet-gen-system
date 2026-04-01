@@ -257,6 +257,21 @@ function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary
               <div>
                 <div><span className="font-medium text-stone-800">Next focus:</span> {summary.understandingSummary.nextFocus}</div>
               </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Intake goal completed:</span> {summary.intakeGoal.completed}</div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Missing macro slots:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.intakeGoal.missingSlots.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
+              <div>
+                <div><span className="font-medium text-stone-800">Macro slot progress:</span></div>
+                <div className="mt-1 space-y-1 text-stone-600">
+                  {summary.intakeGoal.slotProgress.map((item) => <div key={item}>{item}</div>)}
+                </div>
+              </div>
             </div>
           </div>
 

@@ -1,4 +1,5 @@
 import { analyzeEntryText, type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type QuestionTrace } from "@/features/entryAgent";
+import { renderPersonaQuestionBridge, renderPersonaUnderstanding } from "./personaRenderer";
 import { buildUnderstandingSummary, renderUnderstandingSummary } from "./understandingSummary";
 
 const MAX_INTENT_TURNS = 3;
@@ -248,10 +249,19 @@ function buildCumulativeUnderstanding(input: {
   turnCount: number;
 }) {
   const summary = buildUnderstandingSummary(input.analysis);
-  const rendered = renderUnderstandingSummary(summary);
+  const personaRendered = renderPersonaUnderstanding({
+    analysis: input.analysis,
+    summary,
+    goalState: input.analysis.intakeGoalState,
+  });
 
-  if (rendered.trim().length > 0) {
-    return rendered;
+  if (personaRendered.trim().length > 0) {
+    return personaRendered;
+  }
+
+  const fallbackRendered = renderUnderstandingSummary(summary);
+  if (fallbackRendered.trim().length > 0) {
+    return fallbackRendered;
   }
 
   return getSemanticUnderstandingNarrative(input.analysis);
@@ -307,9 +317,12 @@ export async function buildIntentStabilizationSnapshot({
   };
   const cumulativeCanvas = mergeSemanticCanvas(previousSnapshot?.conversationState.cumulativeCanvas, analysis.semanticCanvas);
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
-  const selectedPrompt = readyToGenerate
+  const rawSelectedPrompt = readyToGenerate
     ? "我已经有一个初步方向了，我们先进入第一轮看看。"
     : analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
+  const selectedPrompt = readyToGenerate
+    ? rawSelectedPrompt
+    : `${renderPersonaQuestionBridge({ analysis, goalState: analysis.intakeGoalState })} ${rawSelectedPrompt}`.trim();
   const nextQuestionTrace = readyToGenerate
     ? undefined
     : buildQuestionTrace({

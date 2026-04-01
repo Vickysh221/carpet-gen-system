@@ -340,3 +340,94 @@ intent stabilization 阶段的 `next question` 过于稳定地退回到：
 下一阶段最值得继续做的是：
 - 把 `colorMood / patternTendency / overallImpression` 继续拆成更细的 subgap
 - 让 planner 选的是“field 内部缺口”，而不是只选高层 field
+
+---
+
+## 2026-04-01 — intent intake agent formalization
+
+### Strategic shift
+意向对话链不再被视为一段零散的 text intake / question planning 逻辑，而被正式升级为一个独立 agent：
+
+- **Intent Intake Agent**
+
+它的身份不是：
+- 调试器
+- 问卷系统
+- 裸露 slot / gap / confidence 的规则链
+
+它的身份应是：
+- 朋友式的地毯设计专家
+- 意向解读专家
+- 帮用户把模糊偏好慢慢收成一个可用 base profile 的 intake agent
+
+### Product-level goal clarified
+这个 agent 的任务目标被明确为：
+
+- 在有限轮次内，收集出一个 **可生成的 base preference profile**
+- 每个大槽位至少拿到一个 base direction
+- 每个大槽位至少有一个主值超过阈值（初始建议 `> 0.5`）
+
+建议的大槽位层为：
+- 整体感觉
+- 颜色方向
+- 图案方向
+- 排布方向
+- 空间 / 使用场景
+
+### Critical architecture separation
+正式要求分清三层：
+
+1. **Internal semantic state**
+   - slot / axis / confidence / question family / resolution state
+
+2. **Goal state**
+   - 哪些 macro slot 已拿到 base direction
+   - 哪些还没拿到
+   - 当前是否可以进入下一阶段
+
+3. **Persona renderer**
+   - 内部参数化
+   - 外部人格化
+   - 禁止把 slot / gap / confidence / family 直接暴露给用户
+
+### Important user-facing rule
+以下内容未来不应直接出现在用户文案中：
+- `colorMood`
+- `patternTendency`
+- `gap`
+- `anchor`
+- `question family`
+- `confidence 28%`
+- `contrast-*`
+
+这些只应留在 debug inspect / internal state。
+
+### Future extensibility requirement
+这个 agent 从一开始就不能只为文本写死，因为后续大概率要扩展到：
+
+- **图文双决策链**
+
+因此 intake input 未来应升级成 signal-based abstraction，使以下都能接进同一 agent：
+- text utterance
+- image like/dislike
+- image comparison
+- visual cue note
+
+### Documentation added
+详细 spec 见：
+- `docs/intent-intake-agent-spec-2026-04-01.md`
+- `docs/intent-intake-agent-slot-system-v1-2026-04-01.md`
+- `docs/intent-intake-agent-dialogue-state-machine-v1-2026-04-01.md`
+- `docs/intent-intake-agent-signal-schema-v1-2026-04-01.md`
+
+### Execution order agreed
+后续按以下顺序推进：
+1. **A. 宏槽位 / 子槽位体系 v1**
+2. **B. 对话阶段状态机 v1**
+3. **C. 图文双决策链 signal schema v1**
+
+目前 A / B / C 已完成文档沉淀。下一步应开始把现有代码从 text-only intake 改造成 signal-based intake，并逐步引入：
+- text signal
+- image preference signal
+- image comparison signal
+- confirmation / control signal

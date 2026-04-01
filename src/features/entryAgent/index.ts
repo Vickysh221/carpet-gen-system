@@ -4,6 +4,7 @@ import { detectHighValueFieldHits } from "./fieldHitDetection";
 import { deriveFollowUpRecommendation } from "./followUpRecommendation";
 import { mergeInterpretationCandidates } from "./prototypeMerge";
 import { resolvePrototypeCandidates } from "./prototypeMatching";
+import { buildIntentIntakeGoalState } from "./intakeGoalState";
 import { buildQuestionPlan } from "./questionPlanning";
 import { resolvePreviousQuestion } from "./questionResolution";
 import { buildSemanticCanvas, buildSemanticCanvasCandidates } from "./semanticCanvas";
@@ -85,6 +86,19 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     semanticGaps,
     questionPlan,
   });
+  const intakeGoalState = buildIntentIntakeGoalState({
+    ...detection,
+    interpretationMerge,
+    ...bridge,
+    semanticUnderstanding,
+    semanticGaps,
+    questionCandidates,
+    questionPlan,
+    questionResolutionState: questionPlan?.resolutionState ?? resolutionState,
+    latestResolution: questionPlan?.latestResolution ?? latestResolution,
+    ...recommendation,
+    updatedSlotStates,
+  });
 
   return {
     ...detection,
@@ -96,6 +110,7 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     questionPlan,
     questionResolutionState: questionPlan?.resolutionState ?? resolutionState,
     latestResolution: questionPlan?.latestResolution ?? latestResolution,
+    intakeGoalState,
     ...recommendation,
     updatedSlotStates,
   };

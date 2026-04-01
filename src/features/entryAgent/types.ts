@@ -348,6 +348,23 @@ export interface QuestionResolutionState {
   families: Record<QuestionFamilyId, QuestionResolution>;
 }
 
+export type IntakeMacroSlot = "impression" | "color" | "pattern" | "arrangement" | "space";
+
+export interface IntakeSlotProgress {
+  slot: IntakeMacroSlot;
+  topDirection?: string;
+  topScore: number;
+  supportingSignals: string[];
+  isBaseCaptured: boolean;
+}
+
+export interface IntentIntakeGoalState {
+  slots: IntakeSlotProgress[];
+  completed: boolean;
+  completionReason?: string;
+  missingSlots: IntakeMacroSlot[];
+}
+
 export interface AnswerAlignment {
   status: "initial" | "answered" | "partial" | "shifted";
   introducedFields: HighValueField[];
@@ -380,6 +397,7 @@ export interface EntryAgentSemanticPlanningResult {
   questionPlan?: QuestionPlan;
   questionResolutionState?: QuestionResolutionState;
   latestResolution?: QuestionResolution;
+  intakeGoalState?: IntentIntakeGoalState;
 }
 
 export interface EntryAgentResult

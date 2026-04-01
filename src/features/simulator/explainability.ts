@@ -135,6 +135,11 @@ export interface ConversationStateLogSummary {
     openItems: string[];
     nextFocus: string;
   };
+  intakeGoal: {
+    completed: string;
+    missingSlots: string[];
+    slotProgress: string[];
+  };
   deltaExplanation: DeltaExplanationItem[];
 }
 
@@ -684,6 +689,13 @@ export function buildConversationStateLogSummary(input: {
         ? understandingSummary.openItems.map((item) => `${item.label} · ${item.detail}`)
         : ["none"],
       nextFocus: understandingSummary.nextFocus ?? "none",
+    },
+    intakeGoal: {
+      completed: analysis.intakeGoalState?.completed ? "yes" : "no",
+      missingSlots: analysis.intakeGoalState?.missingSlots.length ? analysis.intakeGoalState.missingSlots : ["none"],
+      slotProgress: analysis.intakeGoalState?.slots.length
+        ? analysis.intakeGoalState.slots.map((slot) => `${slot.slot} · score ${Math.round(slot.topScore * 100)}% · ${slot.topDirection ?? "none"} · ${slot.isBaseCaptured ? "captured" : "open"}`)
+        : ["none"],
     },
     deltaExplanation,
   } satisfies ConversationStateLogSummary;
