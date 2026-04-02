@@ -26,6 +26,42 @@ function getMissingField(updatedSlotStates: Partial<Record<HighValueField, SlotS
   return MISSING_SLOT_PRIORITY.find((field) => updatedSlotStates[field] === undefined || updatedSlotStates[field] === "unknown");
 }
 
+function fieldHasStructuredSeed(input: {
+  field: HighValueField;
+  updatedSlotStates: Partial<Record<HighValueField, SlotStateStatus>>;
+  finalResolvedReadings: InterpretationCandidate[];
+  semanticCanvas?: FuliSemanticCanvas;
+  resolutionState?: QuestionResolutionState;
+}) {
+  const slotState = input.updatedSlotStates[input.field];
+  if (slotState === "tentative" || slotState === "weak-signal" || slotState === "locked") {
+    return true;
+  }
+
+  const hasResolution = Object.values(input.resolutionState?.families ?? {}).some(
+    (resolution) =>
+      resolution.familyId.startsWith(`${input.field}:`) &&
+      (resolution.status === "resolved" || resolution.status === "narrowed"),
+  );
+  if (hasResolution) {
+    return true;
+  }
+
+  const hasReading = input.finalResolvedReadings.some((reading) => reading.field === input.field && reading.confidence >= 0.52);
+  if (hasReading) {
+    return true;
+  }
+
+  if (input.field === "patternTendency") {
+    const rawCueText = input.semanticCanvas?.rawCues.join(" ") ?? "";
+    if (["荷花", "莲花", "荷叶", "山水", "波纹", "叶", "植物", "几何"].some((cue) => rawCueText.includes(cue))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function mapFieldToSlot(field: HighValueField | undefined) {
   if (field === "overallImpression") return "impression";
   if (field === "colorMood") return "color";
@@ -37,6 +73,8 @@ function mapFieldToSlot(field: HighValueField | undefined) {
 function pickAnchoredMissingField(input: {
   finalResolvedReadings: InterpretationCandidate[];
   updatedSlotStates: Partial<Record<HighValueField, SlotStateStatus>>;
+  semanticCanvas?: FuliSemanticCanvas;
+  resolutionState?: QuestionResolutionState;
 }) {
   const rankedAnchors = [...input.finalResolvedReadings].sort((left, right) => {
     const leftState = input.updatedSlotStates[left.field];
@@ -49,8 +87,13 @@ function pickAnchoredMissingField(input: {
   });
 
   for (const reading of rankedAnchors) {
-    const state = input.updatedSlotStates[reading.field];
-    if (state === "tentative" || state === "weak-signal") {
+    if (fieldHasStructuredSeed({
+      field: reading.field,
+      updatedSlotStates: input.updatedSlotStates,
+      finalResolvedReadings: input.finalResolvedReadings,
+      semanticCanvas: input.semanticCanvas,
+      resolutionState: input.resolutionState,
+    })) {
       return reading.field;
     }
   }
@@ -250,8 +293,18 @@ export function buildSemanticGaps(input: {
   const anchoredField = pickAnchoredMissingField({
     finalResolvedReadings: input.interpretationMerge.finalResolvedReadings,
     updatedSlotStates: input.updatedSlotStates,
+    semanticCanvas: input.bridge.semanticCanvas,
+    resolutionState: input.resolutionState,
   });
-  const missingField = anchoredField ?? getMissingField(input.updatedSlotStates);
+  const missingField = anchoredField ?? MISSING_SLOT_PRIORITY.find((field) =>
+    !fieldHasStructuredSeed({
+      field,
+      updatedSlotStates: input.updatedSlotStates,
+      finalResolvedReadings: input.interpretationMerge.finalResolvedReadings,
+      semanticCanvas: input.bridge.semanticCanvas,
+      resolutionState: input.resolutionState,
+    }),
+  );
 
   function pushMissingSlotGap(field: HighValueField, basePriority: number) {
     const targetReading = pickReadingForField(input.interpretationMerge.finalResolvedReadings, field);
@@ -288,7 +341,15 @@ export function buildSemanticGaps(input: {
     pushMissingSlotGap(missingField, 40);
     // Second gap: find the next uncovered field for coverage balance
     const secondMissingField = MISSING_SLOT_PRIORITY.find(
-      (f) => f !== missingField && (input.updatedSlotStates[f] === undefined || input.updatedSlotStates[f] === "unknown"),
+      (f) =>
+        f !== missingField &&
+        !fieldHasStructuredSeed({
+          field: f,
+          updatedSlotStates: input.updatedSlotStates,
+          finalResolvedReadings: input.interpretationMerge.finalResolvedReadings,
+          semanticCanvas: input.bridge.semanticCanvas,
+          resolutionState: input.resolutionState,
+        }),
     );
     if (secondMissingField) {
       pushMissingSlotGap(secondMissingField, 28);

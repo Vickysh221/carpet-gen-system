@@ -265,19 +265,19 @@ const AXIS_GLOSS_REGISTRY: Record<ExplainabilityAxisPath, AxisGlossDefinition> =
 };
 
 const FIELD_LABELS: Record<HighValueField, string> = {
-  spaceContext: "space context",
-  overallImpression: "overall impression",
-  colorMood: "color mood",
-  patternTendency: "pattern tendency",
-  arrangementTendency: "arrangement tendency",
+  spaceContext: "空间场景",
+  overallImpression: "整体氛围",
+  colorMood: "颜色方向",
+  patternTendency: "图案方向",
+  arrangementTendency: "排布方式",
 };
 
 const QA_MODE_LABELS: Record<QaMode, string> = {
-  "exploratory-intake": "exploratory intake",
-  "slot-completion": "slot completion",
-  "preference-shift": "preference shift",
-  "slot-revision": "slot revision",
-  "lock-reinforcement": "lock reinforcement",
+  "exploratory-intake": "探索式理解",
+  "slot-completion": "补齐关键方向",
+  "preference-shift": "方向切换",
+  "slot-revision": "槽位修正",
+  "lock-reinforcement": "方向加固",
 };
 
 function clamp01(value: number) {

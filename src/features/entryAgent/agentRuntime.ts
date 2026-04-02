@@ -1,4 +1,5 @@
 import { analyzeEntryText } from "./index";
+import { applyOpeningSelectionToAgentState } from "./openingOptionDelta";
 import type {
   AgentNextAction,
   AgentStateUpdateSource,
@@ -363,6 +364,29 @@ function scoreSlotForNextAction(slot: MacroSlotState, goalState: IntentIntakeAge
   return score;
 }
 
+function scoreSlotWithSemanticMapping(agentState: IntentIntakeAgentState, slot: MacroSlotState): number {
+  const baseScore = scoreSlotForNextAction(slot, agentState.goalState);
+  const mapping = agentState.latestSemanticMapping;
+  if (!mapping) {
+    return baseScore;
+  }
+
+  const missingBonus = mapping.confidenceSummary.missingCriticalSlots.includes(slot.slot) ? 12 : 0;
+  const baseReadyPenalty = mapping.confidenceSummary.baseReadySlots.includes(slot.slot) ? -10 : 0;
+  const openQuestionCount =
+    slot.slot === "impression"
+      ? (mapping.slotHypotheses.impression?.openQuestions.length ?? 0)
+      : slot.slot === "color"
+        ? (mapping.slotHypotheses.color?.openQuestions.length ?? 0)
+        : slot.slot === "pattern"
+          ? (mapping.slotHypotheses.patternIntent?.openQuestions.length ?? 0)
+          : slot.slot === "arrangement"
+            ? (mapping.slotHypotheses.arrangement?.openQuestions.length ?? 0)
+            : (mapping.slotHypotheses.space?.evidence.length ?? 0);
+
+  return baseScore + missingBonus + baseReadyPenalty + Math.min(10, openQuestionCount * 3);
+}
+
 function pickCandidateFromAgentState(agentState: IntentIntakeAgentState) {
   const candidates = agentState.latestAnalysis?.questionCandidates ?? [];
   if (candidates.length === 0) {
@@ -370,7 +394,7 @@ function pickCandidateFromAgentState(agentState: IntentIntakeAgentState) {
   }
 
   const slotScores = new Map<IntakeMacroSlot, number>(
-    agentState.slots.map((slot) => [slot.slot, scoreSlotForNextAction(slot, agentState.goalState)]),
+    agentState.slots.map((slot) => [slot.slot, scoreSlotWithSemanticMapping(agentState, slot)]),
   );
 
   return [...candidates]
@@ -416,6 +440,104 @@ function determineDominantEntryPoint(analysis: EntryAgentResult): IntentSemantic
   if (analysis.hitFields.includes("colorMood")) return "color";
   if (analysis.hitFields.includes("overallImpression")) return "mood";
   return "presence";
+}
+
+export function buildIntentSemanticMappingFromAgentState(agentState: IntentIntakeAgentState): IntentSemanticMapping {
+  const impressionSlot = agentState.slots.find((slot) => slot.slot === "impression");
+  const colorSlot = agentState.slots.find((slot) => slot.slot === "color");
+  const patternSlot = agentState.slots.find((slot) => slot.slot === "pattern");
+  const arrangementSlot = agentState.slots.find((slot) => slot.slot === "arrangement");
+  const spaceSlot = agentState.slots.find((slot) => slot.slot === "space");
+
+  return {
+    rawCues: [],
+    interpretedIntent: {
+      dominantEntryPoint:
+        (patternSlot?.topScore ?? 0) >= Math.max(impressionSlot?.topScore ?? 0, colorSlot?.topScore ?? 0)
+          ? "pattern-intent"
+          : (colorSlot?.topScore ?? 0) >= (impressionSlot?.topScore ?? 0)
+            ? "color"
+            : "mood",
+      summary: agentState.slots
+        .filter((slot) => slot.topDirection)
+        .slice(0, 3)
+        .map((slot) => `${slot.slot}:${slot.topDirection}`)
+        .join(" · "),
+      designReading: agentState.slots.flatMap((slot) => slot.openBranches).slice(0, 6),
+      metaphorNotes: [],
+    },
+    slotHypotheses: {
+      impression: impressionSlot
+        ? {
+            topDirections: impressionSlot.topCandidates.map((candidate) => ({
+              label: candidate.label,
+              score: candidate.score,
+              evidence: candidate.evidence,
+            })),
+            openQuestions: impressionSlot.openBranches,
+          }
+        : undefined,
+      color: colorSlot
+        ? {
+            evidence: colorSlot.supportingSignals,
+            openQuestions: colorSlot.openBranches,
+          }
+        : undefined,
+      patternIntent: patternSlot
+        ? {
+            subject: patternSlot.patternIntent?.keyElement
+              ? { candidates: [{ label: patternSlot.patternIntent.keyElement, score: patternSlot.topScore, evidence: patternSlot.supportingSignals }] }
+              : undefined,
+            rendering: patternSlot.patternIntent?.renderingMode
+              ? { top: patternSlot.patternIntent.renderingMode, score: patternSlot.topScore }
+              : undefined,
+            abstractionPreference: patternSlot.patternIntent
+              ? { top: patternSlot.patternIntent.abstractionPreference, score: patternSlot.topScore }
+              : undefined,
+            compositionFeeling: patternSlot.patternIntent?.motionFeeling
+              ? { tags: [patternSlot.patternIntent.motionFeeling], score: patternSlot.topScore }
+              : undefined,
+            evidence: patternSlot.supportingSignals,
+            openQuestions: patternSlot.openBranches,
+          }
+        : undefined,
+      arrangement: arrangementSlot
+        ? {
+            evidence: arrangementSlot.supportingSignals,
+            openQuestions: arrangementSlot.openBranches,
+          }
+        : undefined,
+      space: spaceSlot
+        ? {
+            usageMode: spaceSlot.topDirection ? { tags: [spaceSlot.topDirection], score: spaceSlot.topScore } : undefined,
+            evidence: spaceSlot.supportingSignals,
+          }
+        : undefined,
+      presence: { evidence: [], openQuestions: [] },
+    },
+    questionOpportunities: [],
+    resolutionHints: Object.values(agentState.resolutionState?.families ?? {}).map((resolution) => ({
+      familyId: resolution.familyId,
+      status: resolution.status === "rejected" ? "unresolved" : resolution.status,
+      chosenBranch: resolution.chosenBranch,
+      rejectedBranches: resolution.rejectedBranches,
+      rationale: resolution.reason,
+    })),
+    confidenceSummary: {
+      macroSlotCoverage: {
+        impression: impressionSlot?.topScore ?? 0,
+        color: colorSlot?.topScore ?? 0,
+        patternIntent: patternSlot?.topScore ?? 0,
+        arrangement: arrangementSlot?.topScore ?? 0,
+        space: spaceSlot?.topScore ?? 0,
+        presence: 0,
+      },
+      baseReadySlots: agentState.goalState?.slots.filter((slot) => slot.isBaseCaptured).map((slot) => slot.slot) ?? [],
+      lockCandidateSlots: agentState.goalState?.slots.filter((slot) => slot.phase === "lock-candidate").map((slot) => slot.slot) ?? [],
+      missingCriticalSlots: agentState.goalState?.missingSlots ?? [],
+      readyForFirstBatch: agentState.goalState?.readyForFirstGeneration ?? false,
+    },
+  };
 }
 
 export function buildIntentSemanticMappingFromAnalysis(analysis: EntryAgentResult): IntentSemanticMapping {
@@ -646,6 +768,24 @@ export async function updateAgentStateFromSignal(
 ): Promise<IntentIntakeAgentState> {
   const state = createIntentIntakeAgentState(currentState);
 
+  if (signal.type === "opening-selection") {
+    const openingApplied = applyOpeningSelectionToAgentState({
+      selections: signal.selections,
+      currentState: state,
+    });
+    const latestSemanticMapping = buildIntentSemanticMappingFromAgentState(openingApplied.updatedAgentState);
+    const nextState = {
+      ...openingApplied.updatedAgentState,
+      latestSemanticMapping,
+    };
+    return {
+      ...nextState,
+      turnIndex: Math.max(state.turnIndex, signal.turnIndex),
+      nextAction: decideNextAction(nextState),
+      lastSignalType: signal.type,
+    };
+  }
+
   if (signal.type !== "text") {
     throw new Error(`updateAgentStateFromSignal: "${signal.type}" signals are not yet implemented.`);
   }
@@ -684,6 +824,18 @@ export function decideNextAction(agentState: IntentIntakeAgentState): AgentNextA
     return {
       type: "generate-first-batch",
       reason: agentState.goalState.firstGenerationReason ?? "关键槽位已经达到 first batch 条件。",
+    };
+  }
+
+  if (!agentState.latestAnalysis && agentState.latestSemanticMapping) {
+    const targetSlot = (agentState.goalState?.missingSlots[0] ??
+      agentState.latestSemanticMapping.confidenceSummary.missingCriticalSlots[0]) as IntakeMacroSlot | undefined;
+    return {
+      type: "hold",
+      reason: targetSlot
+        ? `${targetSlot} 还没有形成稳定主方向，先沿这条主状态继续收集。`
+        : "opening priors 已进入主状态，等待下一条用户输入继续收敛。",
+      targetSlot,
     };
   }
 

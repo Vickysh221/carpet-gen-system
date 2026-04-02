@@ -22,6 +22,29 @@ export async function processIntakeSignal(
   context: IntakeSignalContext = {},
 ): Promise<EntryAgentResult> {
   switch (signal.type) {
+    case "opening-selection": {
+      const seededState = context.currentAgentState
+        ? createIntentIntakeAgentState(context.currentAgentState)
+        : createIntentIntakeAgentState({
+            cumulativeText: context.cumulativeText,
+            resolutionState: context.resolutionState,
+            goalState: context.previousGoalState,
+            previousQuestion: context.previousQuestionTrace,
+            questionHistory: context.questionHistory ?? [],
+          });
+      const agentState = await updateAgentStateFromSignal(signal, seededState);
+      const analysis = agentState.latestAnalysis ?? context.previousAnalysis;
+      if (!analysis) {
+        throw new Error('processIntakeSignal: opening-selection requires previous analysis or a later text signal before analysis is available.');
+      }
+      return {
+        ...analysis,
+        semanticMapping: agentState.latestSemanticMapping,
+        agentState,
+        nextAction: agentState.nextAction,
+      };
+    }
+
     case "text": {
       const seededState = context.currentAgentState
         ? createIntentIntakeAgentState(context.currentAgentState)

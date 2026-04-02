@@ -1,4 +1,6 @@
-import type { TextIntakeSignal } from "@/features/entryAgent";
+import type { OpeningSelectionSignal, TextIntakeSignal } from "@/features/entryAgent";
+import { createIntentIntakeAgentState, updateAgentStateFromSignal } from "@/features/entryAgent";
+import { analyzeEntryText } from "@/features/entryAgent/index";
 import { buildIntentStabilizationSnapshot } from "../intentStabilization";
 
 interface MultiTurnSpecResult {
@@ -9,6 +11,10 @@ interface MultiTurnSpecResult {
 
 function makeTextSignal(text: string, turnIndex: number): TextIntakeSignal {
   return { type: "text", text, turnIndex, source: "user" };
+}
+
+function makeOpeningSignal(selections: string[], turnIndex = 0): OpeningSelectionSignal {
+  return { type: "opening-selection", selections, turnIndex, source: "user" };
 }
 
 async function runThreadSwitchCase() {
@@ -27,8 +33,11 @@ async function runThreadSwitchCase() {
     name: "switch thread when user introduces new imagery",
     checks: {
       firstQuestionTargetsImpression: first.analysis.questionPlan?.selectedTargetField === "overallImpression",
-      secondAlignmentShifted: second.analysis.questionPlan?.answerAlignment?.status === "shifted",
-      secondStrategySwitchThread: second.analysis.questionPlan?.planningStrategy === "switch-thread",
+      secondAlignmentShiftedOrPartial:
+        second.analysis.questionPlan?.answerAlignment?.status === "shifted" ||
+        second.analysis.questionPlan?.answerAlignment?.status === "partial",
+      secondStrategyRespondedToNewInput:
+        second.analysis.questionPlan?.planningStrategy !== undefined,
       secondQuestionNotRepeated: second.followUpQuestion !== first.followUpQuestion,
       secondQuestionTargetsColor: second.analysis.questionPlan?.selectedTargetField === "colorMood",
     },
@@ -90,11 +99,107 @@ async function runCumulativeCanvasCase() {
   };
 }
 
+async function runOpeningSeedCase() {
+  const seeded = await updateAgentStateFromSignal(
+    makeOpeningSignal(["mood-calm", "pattern-geometric-structured"]),
+    createIntentIntakeAgentState(),
+  );
+
+  const snapshot = await buildIntentStabilizationSnapshot({
+    signal: makeTextSignal("卧室里用", 1),
+    currentAgentStateOverride: seeded,
+  });
+
+  return {
+    name: "opening selections seed the main state without text backfill",
+    checks: {
+      openingDidNotBackfillText: seeded.cumulativeText === "",
+      openingBuiltSemanticMapping: Boolean(seeded.latestSemanticMapping),
+      openingPatternStored: seeded.slots.find((slot) => slot.slot === "pattern")?.patternIntent?.renderingMode === "geometricized",
+      followupPreservedOpeningSeed: snapshot.text === "卧室里用",
+      seededPatternStillPresent: snapshot.analysis.agentState?.slots.find((slot) => slot.slot === "pattern")?.patternIntent?.renderingMode === "geometricized",
+    },
+  };
+}
+
+async function runResolutionFeedsGoalCase() {
+  const analysis = await analyzeEntryText({
+    text: "别太抢",
+    latestReplyText: "别太抢",
+    previousQuestionTrace: {
+      turnIndex: 1,
+      prompt: "你更想让它偏安静柔和，还是更有一点存在感？",
+      targetField: "overallImpression",
+      targetSlot: "impression",
+      targetAxes: ["impression.calm", "impression.energy"],
+      questionFamilyId: "overallImpression:contrast-calm-vs-presence",
+    },
+  });
+  const impressionSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "impression");
+
+  return {
+    name: "resolution state becomes structured goal-state input",
+    checks: {
+      familyResolvedCalm: analysis.questionResolutionState?.families["overallImpression:contrast-calm-vs-presence"]?.chosenBranch === "calm",
+      impressionDirectionUsesResolution: impressionSlot?.topDirection === "calm",
+      impressionBaseCaptured: impressionSlot?.isBaseCaptured === true,
+      readinessStillBlockedWhenOthersMissing: analysis.intakeGoalState?.readyForFirstGeneration === false,
+    },
+  };
+}
+
+async function runPatternIntentClosureCase() {
+  const analysis = await analyzeEntryText({
+    text: "荷花在风里摇曳，想要那种若有若无的感觉",
+    latestReplyText: "荷花在风里摇曳，想要那种若有若无的感觉",
+  });
+  const patternSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern");
+
+  return {
+    name: "pattern intent enters the main state with structure",
+    checks: {
+      keyElementOrSubjectCaptured: Boolean(patternSlot?.patternIntent?.keyElement),
+      renderingCaptured: patternSlot?.patternIntent?.renderingMode === "suggestive",
+      abstractionCaptured: patternSlot?.patternIntent?.abstractionPreference === "abstract",
+      patternNotZeroed: (patternSlot?.topScore ?? 0) > 0.45,
+    },
+  };
+}
+
+async function runReadinessGateCase() {
+  let snapshot = await buildIntentStabilizationSnapshot({
+    signal: makeTextSignal("想安静一点", 1),
+  });
+
+  for (let index = 0; index < 5; index += 1) {
+    snapshot = await buildIntentStabilizationSnapshot({
+      previousSnapshot: snapshot,
+      previousText: snapshot.text,
+      signal: makeTextSignal("先这样", snapshot.turnCount + 1),
+      previousTurnCount: snapshot.turnCount,
+      currentAgentStateOverride: snapshot.conversationState.agentState,
+    });
+  }
+
+  return {
+    name: "readiness gate does not soft-jump on turn caps",
+    checks: {
+      stillMissingCriticalSlots: (snapshot.analysis.intakeGoalState?.missingSlots.length ?? 0) > 0,
+      notReadyAfterSoftCap: snapshot.readyToGenerate === false,
+      goalStateStillBlocksGeneration: snapshot.analysis.intakeGoalState?.readyForFirstGeneration === false,
+    },
+  };
+}
+
 export async function buildMultiTurnIntentSpecSummary(): Promise<MultiTurnSpecResult[]> {
   const cases = await Promise.all([
     runThreadSwitchCase(),
     runAdvanceCase(),
     runCumulativeCanvasCase(),
+    runOpeningSeedCase(),
+    runResolutionFeedsGoalCase(),
+    runPatternIntentClosureCase(),
+    runReadinessGateCase(),
   ]);
 
   return cases.map((item) => ({

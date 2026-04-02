@@ -25,6 +25,7 @@ interface IntentConversationState {
   questionHistory: QuestionTrace[];
   cumulativeCanvas?: FuliSemanticCanvas;
   resolutionState?: EntryAgentResult["questionResolutionState"];
+  agentState?: IntentIntakeAgentState;
   /** Slots confirmed by the user via confirm-direction signal. */
   lockedSlots: Partial<Record<IntakeMacroSlot, string>>;
 }
@@ -248,20 +249,13 @@ function buildCumulativeUnderstanding(input: {
 
 
 function shouldGenerateNow(analysis: EntryAgentResult, turnCount: number) {
+  const mappingReady = analysis.semanticMapping?.confidenceSummary.readyForFirstBatch ?? false;
   // Goal-state driven: readyForFirstGeneration is the primary gate.
-  if (analysis.intakeGoalState?.readyForFirstGeneration) return true;
+  if (analysis.intakeGoalState?.readyForFirstGeneration && mappingReady) return true;
 
   // Hard cap no longer forces generation when critical slots are still missing.
   if (turnCount >= HARD_TURN_CAP) {
-    return analysis.intakeGoalState?.completed ?? false;
-  }
-
-  // Soft cap should not override slot incompleteness.
-  if (turnCount >= SOFT_TURN_CAP) {
-    const capturedCriticalCount = analysis.intakeGoalState?.slots.filter(
-      (s) => ["impression", "color", "pattern", "arrangement"].includes(s.slot) && s.isBaseCaptured,
-    ).length ?? 0;
-    return capturedCriticalCount >= 2;
+    return Boolean(analysis.intakeGoalState?.completed && mappingReady);
   }
 
   return false;
@@ -284,7 +278,10 @@ export async function buildIntentStabilizationSnapshot({
   // Accumulate text across turns so the full semantic context is available.
   const text = joinUserTexts(previousText, signal.text);
   const turnCount = Math.min(previousTurnCount + 1, HARD_TURN_CAP);
-  const previousAgentState = currentAgentStateOverride ?? previousSnapshot?.analysis.agentState;
+  const previousAgentState =
+    currentAgentStateOverride ??
+    previousSnapshot?.conversationState.agentState ??
+    previousSnapshot?.analysis.agentState;
   const previousQuestionHistory = previousAgentState?.questionHistory ?? previousSnapshot?.conversationState.questionHistory ?? [];
   const previousQuestion = previousQuestionHistory[previousQuestionHistory.length - 1];
   // Route through the unified signal-first entry point.
@@ -322,6 +319,7 @@ export async function buildIntentStabilizationSnapshot({
     ],
     questionHistory: nextQuestionHistory,
     cumulativeCanvas,
+    agentState: analysis.agentState,
     resolutionState: analysis.agentState?.resolutionState ?? analysis.questionResolutionState,
     lockedSlots: previousSnapshot?.conversationState.lockedSlots ?? {},
   };

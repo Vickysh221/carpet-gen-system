@@ -585,6 +585,14 @@ export interface TextIntakeSignal {
   replyToQuestionFamilyId?: string;
 }
 
+/** User selects one or more opening options before or during text intake. */
+export interface OpeningSelectionSignal {
+  type: "opening-selection";
+  selections: string[];
+  turnIndex: number;
+  source: "user";
+}
+
 /** User expresses a preference on a single image (Stage 1+). */
 export interface ImagePreferenceSignal {
   type: "image-preference";
@@ -634,6 +642,7 @@ export interface ConfirmationSignal {
 /** Unified intake signal — single entry point for all modalities. */
 export type IntakeSignal =
   | TextIntakeSignal
+  | OpeningSelectionSignal
   | ImagePreferenceSignal
   | ImageComparisonSignal
   | ConfirmationSignal;

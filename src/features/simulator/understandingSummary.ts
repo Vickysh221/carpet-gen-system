@@ -22,11 +22,35 @@ function toFriendlyFocus(field: HighValueField | undefined): string | undefined 
   return undefined;
 }
 
+function describeFriendlyBranch(branch: string | undefined) {
+  if (!branch) return undefined;
+  if (branch === "calm") return "偏安静、克制";
+  if (branch === "presence") return "保留一点存在感";
+  if (branch === "warm") return "更暖一些";
+  if (branch === "muted") return "更收一点、别太跳";
+  if (branch === "geometry") return "别太硬、别太几何";
+  if (branch === "complexity") return "别太碎太花";
+  if (branch === "open") return "更松、更透气";
+  if (branch === "ordered") return "更整齐、更有秩序";
+  return branch;
+}
+
+function familyToFriendlyLabel(familyId: string) {
+  if (familyId.startsWith("overallImpression:")) return "整体氛围";
+  if (familyId.startsWith("colorMood:")) return "颜色方向";
+  if (familyId.startsWith("patternTendency:")) return "图案方向";
+  if (familyId.startsWith("arrangementTendency:")) return "排布方式";
+  if (familyId.startsWith("spaceContext:")) return "空间场景";
+  return "当前主方向";
+}
+
 function describeResolution(resolution: QuestionResolution): UnderstandingSummaryItem {
-  const branch = resolution.chosenBranch ? ` · 已选 ${resolution.chosenBranch}` : "";
+  const branch = describeFriendlyBranch(resolution.chosenBranch);
+  const branchText = branch ? ` · 现在更偏 ${branch}` : "";
+  const statusText = resolution.status === "resolved" ? "已基本收稳" : resolution.status === "narrowed" ? "已明显收窄" : resolution.status;
   return {
-    label: resolution.familyId,
-    detail: `${resolution.status}${branch} · ${resolution.reason}`,
+    label: familyToFriendlyLabel(resolution.familyId),
+    detail: `${statusText}${branchText} · ${resolution.reason}`,
   };
 }
 
@@ -69,7 +93,7 @@ function summarizeOpenQuestions(analysis: EntryAgentResult): UnderstandingSummar
   if (analysis.semanticGaps.length > 0) {
     return analysis.semanticGaps.slice(0, 2).map((gap, index) => ({
       label: `gap-${index + 1}`,
-      detail: `${gap.targetField ?? "unknown"} · ${gap.reason}`,
+      detail: `${toFriendlyFocus(gap.targetField) ?? "还有一块方向"} · ${gap.reason}`,
     }));
   }
 
@@ -113,12 +137,15 @@ function describeNextFocus(analysis: EntryAgentResult) {
     return undefined;
   }
 
-  const selectedQuestion = analysis.questionPlan?.selectedQuestion;
-  if (!selectedQuestion) {
+  const familyId = analysis.questionPlan?.selectedQuestion?.questionFamilyId;
+  if (!familyId) {
     return `下一步还想再确认一下${focus}。`;
   }
 
-  return `下一步更值得继续确认的是${focus}，因为当前主 gap 还落在 ${selectedQuestion.questionFamilyId ?? selectedQuestion.targetField ?? "当前问题"}。`;
+  const branch = describeFriendlyBranch(analysis.latestResolution?.chosenBranch);
+  return branch
+    ? `下一步更值得继续确认的是${focus}，把这条线继续收稳到“${branch}”附近。`
+    : `下一步更值得继续确认的是${focus}，把这块边界再收清一点。`;
 }
 
 export function buildUnderstandingSummary(analysis: EntryAgentResult): UnderstandingSummary {

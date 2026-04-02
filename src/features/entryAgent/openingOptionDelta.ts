@@ -1,6 +1,6 @@
 import { createIntentIntakeAgentState } from "./agentRuntime";
 import { OPENING_OPTION_INDEX } from "./openingOptionRegistry";
-import type { IntentIntakeAgentState, IntakeMacroSlot, IntakeSlotProgress, MacroSlotState } from "./types";
+import type { IntentIntakeAgentState, IntakeMacroSlot, IntakeSlotProgress, MacroSlotState, PatternIntentState } from "./types";
 import type {
   OpeningFamily,
   OpeningOptionDefinition,
@@ -82,6 +82,84 @@ function scorePatch(delta: Record<string, number>) {
   return clamp(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
 
+function derivePatternIntentFromDelta(delta: Record<string, number>): PatternIntentState | undefined {
+  if (Object.keys(delta).length === 0) {
+    return undefined;
+  }
+
+  const geometry = delta.geometry ?? 0;
+  const organic = delta.organic ?? 0;
+  const abstraction = delta.abstraction ?? 0;
+  const complexity = delta.complexity ?? 0;
+
+  return {
+    abstractionPreference: abstraction >= 0.66 ? "abstract" : abstraction >= 0.42 ? "semi-abstract" : "concrete",
+    renderingMode:
+      geometry >= 0.62
+        ? "geometricized"
+        : abstraction >= 0.58
+          ? "suggestive"
+          : "literal",
+    motionFeeling:
+      organic >= 0.68
+        ? "flowing"
+        : complexity <= 0.32
+          ? "still"
+          : undefined,
+  };
+}
+
+function deriveOpeningDirectionLabel(slot: OpeningPatchSlot, delta: Record<string, number>, options: OpeningOptionDefinition[]) {
+  if (slot === "impression") {
+    if ((delta.calm ?? 0) >= 0.7) return "calm";
+    if ((delta.warmth ?? 0) >= 0.72) return "warm";
+    if ((delta.softness ?? 0) >= 0.66) return "soft";
+    if ((delta.energy ?? 0) >= 0.68) return "energetic";
+    return options[0]?.label;
+  }
+
+  if (slot === "color") {
+    if ((delta.warmth ?? 0) >= 0.7) return "warm";
+    if ((delta.saturation ?? 0) <= 0.3 && (delta.visibility ?? 0) <= 0.34) return "muted";
+    if ((delta.visibility ?? 0) >= 0.6 || (delta.contrast ?? 0) >= 0.6) return "visible";
+    return options[0]?.label;
+  }
+
+  if (slot === "pattern") {
+    if ((delta.geometry ?? 0) >= 0.68) return "geometric";
+    if ((delta.organic ?? 0) >= 0.68) return "organic";
+    if ((delta.complexity ?? 0) <= 0.28 && (delta.motifPresence ?? 0) <= 0.24) return "texture-like";
+    return options[0]?.label;
+  }
+
+  if (slot === "arrangement") {
+    if ((delta.order ?? 0) >= 0.68) return "ordered";
+    if ((delta.openness ?? 0) >= 0.64 || (delta.flow ?? 0) >= 0.68) return "open";
+    return options[0]?.label;
+  }
+
+  if (slot === "space") {
+    if ((delta.officeLike ?? 0) >= 0.72) return "office";
+    if ((delta.resting ?? 0) >= 0.72) return "resting";
+    if ((delta.social ?? 0) >= 0.68) return "social";
+    if ((delta.domestic ?? 0) >= 0.72) return "domestic";
+    return options[0]?.label;
+  }
+
+  return options[0]?.label;
+}
+
+function derivePatternKeyElement(options: OpeningOptionDefinition[]): string | undefined {
+  const joined = options.map((option) => `${option.id} ${option.label}`).join(" ");
+  if (joined.includes("botanical") || joined.includes("植物") || joined.includes("叶")) return "botanical";
+  if (joined.includes("landscape") || joined.includes("山水") || joined.includes("地貌")) return "landscape";
+  if (joined.includes("floral") || joined.includes("花")) return "floral";
+  if (joined.includes("geometric") || joined.includes("几何")) return "geometric-motif";
+  if (joined.includes("wave") || joined.includes("云气") || joined.includes("水意")) return "water-wave";
+  if (joined.includes("texture") || joined.includes("肌理")) return "stone-texture";
+  return undefined;
+}
+
 function buildOpeningSlotPatches(options: OpeningOptionDefinition[]): OpeningSlotPatch[] {
   const suggestedNextTargets = buildSuggestedTargets(options);
   return DELTA_SLOTS.flatMap((slot) => {
@@ -90,7 +168,7 @@ function buildOpeningSlotPatches(options: OpeningOptionDefinition[]): OpeningSlo
     return [{
       slot,
       parameterDelta,
-      topCandidateLabel: options.map((option) => option.label).join(" + "),
+      topCandidateLabel: deriveOpeningDirectionLabel(slot, parameterDelta, options) ?? options.map((option) => option.label).join(" + "),
       score: scorePatch(parameterDelta),
       supportingOptionIds: options.map((option) => option.id),
       suggestedNextTargets,
@@ -101,9 +179,15 @@ function buildOpeningSlotPatches(options: OpeningOptionDefinition[]): OpeningSlo
 function applyPatchToMacroSlotState(currentSlot: MacroSlotState, patch: OpeningSlotPatch): MacroSlotState {
   const label = patch.topCandidateLabel;
   const existingCandidates = currentSlot.topCandidates.filter((candidate) => candidate.label !== label);
+  const nextScore = Math.max(currentSlot.topScore, patch.score);
+  const nextStatus = currentSlot.status === "empty" && patch.score >= 0.58
+    ? "base-ready"
+    : currentSlot.status === "empty"
+      ? "hinted"
+      : currentSlot.status;
   return {
     ...currentSlot,
-    status: currentSlot.status === "empty" ? "hinted" : currentSlot.status,
+    status: nextStatus,
     recentTrend: "strengthening",
     lastUpdatedBy: "bootstrap",
     topCandidates: [
@@ -116,9 +200,27 @@ function applyPatchToMacroSlotState(currentSlot: MacroSlotState, patch: OpeningS
       ...existingCandidates,
     ].slice(0, 3),
     topDirection: currentSlot.topDirection ?? label,
-    topScore: Math.max(currentSlot.topScore, patch.score),
+    topScore: nextScore,
     supportingSignals: [...new Set([...currentSlot.supportingSignals, ...patch.supportingOptionIds])],
     openBranches: [...new Set([...currentSlot.openBranches, ...patch.suggestedNextTargets])].slice(0, 4),
+    patternIntent: patch.slot === "pattern"
+      ? (() => {
+          const derivedPatternIntent = derivePatternIntentFromDelta(patch.parameterDelta);
+          if (!derivedPatternIntent) {
+            return currentSlot.patternIntent;
+          }
+          return {
+            abstractionPreference: currentSlot.patternIntent?.abstractionPreference ?? derivedPatternIntent.abstractionPreference,
+            keyElement: currentSlot.patternIntent?.keyElement ?? derivePatternKeyElement(
+              patch.supportingOptionIds
+                .map((id) => OPENING_OPTION_INDEX.get(id))
+                .filter((option): option is OpeningOptionDefinition => Boolean(option)),
+            ),
+            renderingMode: derivedPatternIntent.renderingMode ?? currentSlot.patternIntent?.renderingMode,
+            motionFeeling: derivedPatternIntent.motionFeeling ?? currentSlot.patternIntent?.motionFeeling,
+          };
+        })()
+      : currentSlot.patternIntent,
   };
 }
 
@@ -152,7 +254,12 @@ function buildGoalStateFromOpeningSlots(slots: MacroSlotState[]): IntentIntakeAg
   const color = progressSlots.find((slot) => slot.slot === "color");
   const capturedCount = progressSlots.filter((slot) => criticalSlots.includes(slot.slot) && slot.isBaseCaptured).length;
   const readyForFirstGeneration =
-    Boolean(impression?.isBaseCaptured && (pattern?.isBaseCaptured || color?.isBaseCaptured)) || capturedCount >= 3;
+    Boolean(
+      impression?.isBaseCaptured &&
+      color?.isBaseCaptured &&
+      pattern?.isBaseCaptured &&
+      progressSlots.find((slot) => slot.slot === "arrangement")?.isBaseCaptured,
+    ) || (capturedCount === criticalSlots.length);
 
   return {
     slots: progressSlots,

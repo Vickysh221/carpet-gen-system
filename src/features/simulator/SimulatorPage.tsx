@@ -11,7 +11,6 @@ import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSou
 import { assignDiverseNearestAnnotatedAssets, assignProbingCarriers, findNearestAnnotatedAssets, findExploratoryAnnotatedAssets } from "@/core/assets/matching";
 import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "@/core/assets/types";
 import {
-  applyOpeningSelectionToAgentState,
   createIntentIntakeAgentState,
   getOpeningFamiliesForFirstTurns,
   OPENING_OPTION_INDEX,
@@ -19,7 +18,9 @@ import {
   type OpeningQuestionFamilyDefinition,
   type EntryAgentResult,
   type IntakeMacroSlot,
+  type OpeningSelectionSignal,
   type TextIntakeSignal,
+  updateAgentStateFromSignal,
 } from "@/features/entryAgent";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
 
@@ -58,19 +59,6 @@ function summarizeEntryAnalysis(analysis: EntryAgentResult) {
 
 function formatOpeningPromptForPanel(prompt: string) {
   return prompt.replace(/\s+/g, " ").trim();
-}
-
-function mergeOpeningSelectionText(currentText: string, label: string, allowsMultiple: boolean) {
-  const normalizedCurrent = currentText.trim();
-  if (!allowsMultiple) {
-    return label;
-  }
-
-  const parts = normalizedCurrent
-    ? normalizedCurrent.split(/[+,，、]/).map((part) => part.trim()).filter(Boolean)
-    : [];
-  const nextParts = parts.includes(label) ? parts.filter((part) => part !== label) : [...parts, label];
-  return nextParts.join("，");
 }
 
 function firstOrderFromState(state: SimulatorState): FirstOrderSlotValues {
@@ -292,7 +280,7 @@ function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary
           </div>
 
           <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Resolution + understanding debug</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Resolution + understanding trace</div>
             <div className="mt-2 space-y-3 text-sm leading-6 text-stone-700">
               <div>
                 <div><span className="font-medium text-stone-800">Resolved families:</span></div>
@@ -343,7 +331,7 @@ function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary
           </div>
 
           <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Question trace debug</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Question trace</div>
             <div className="mt-2 space-y-3 text-sm leading-6 text-stone-700">
               <div>
                 <div><span className="font-medium text-stone-800">Hit field evidence:</span></div>
@@ -373,11 +361,11 @@ function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary
           </div>
 
           <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Cumulative semantic canvas</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Cumulative imagery cues</div>
             <div className="mt-2 space-y-2 text-sm leading-6">
               <div><span className="font-medium text-stone-800">Source:</span> {summary.cumulativeCanvas.source}</div>
-              <div><span className="font-medium text-stone-800">Raw cues:</span> {summary.cumulativeCanvas.rawCues.join(" / ")}</div>
-              <div><span className="font-medium text-stone-800">Conceptual axes:</span> {summary.cumulativeCanvas.conceptualAxes.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">Captured cues:</span> {summary.cumulativeCanvas.rawCues.join(" / ")}</div>
+              <div><span className="font-medium text-stone-800">High-level reading:</span> {summary.cumulativeCanvas.conceptualAxes.join(" / ")}</div>
               <div><span className="font-medium text-stone-800">Must preserve:</span> {summary.cumulativeCanvas.mustPreserve.join(" / ")}</div>
             </div>
           </div>
@@ -482,13 +470,14 @@ function VariantCardView({
 }
 
 export function SimulatorPage() {
+  const [layoutMode, setLayoutMode] = useState<"default" | "immersive">("default");
   const [round, setRound] = useState(1);
   const [baseState, setBaseState] = useState<SimulatorState>(() => createRandomBaseState());
   const [variants, setVariants] = useState<VariantCard[]>(() => generateRoundVariants(createRandomBaseState(), 1));
   const [entryText, setEntryText] = useState("");
   const [intentSnapshot, setIntentSnapshot] = useState<IntentUnderstandingSnapshot | null>(null);
   const [entryAnalysis, setEntryAnalysis] = useState<EntryAgentResult | null>(null);
-  const [openingDraftAgentState, setOpeningDraftAgentState] = useState<IntentIntakeAgentState | null>(null);
+  const [currentAgentState, setCurrentAgentState] = useState<IntentIntakeAgentState | null>(null);
   const [initializationExplainability, setInitializationExplainability] = useState<InitializationExplainabilityResult | null>(null);
   const [isInspectExpanded, setIsInspectExpanded] = useState(false);
   const [selectedRefInspect, setSelectedRefInspect] = useState<SelectedRefInspectState | null>(null);
@@ -497,12 +486,13 @@ export function SimulatorPage() {
   const [likedHistory, setLikedHistory] = useState<LikedHistoryCard[]>([]);
   const [finalChoice, setFinalChoice] = useState<VariantCard | null>(null);
   const [assetSourceMode, setAssetSourceMode] = useState<AssetSourceMode>("core+extended");
-  const [matchMode, setMatchMode] = useState<"auto" | "stable" | "explore">("auto");
+  const [matchMode, setMatchMode] = useState<"auto" | "stable" | "explore">("explore");
   const [seenRefIds, setSeenRefIds] = useState<string[]>([]);
   const [rejectedRefIds, setRejectedRefIds] = useState<string[]>([]);
   const [assetPoolExhausted, setAssetPoolExhausted] = useState(false);
   const [isIntentAnalyzing, setIsIntentAnalyzing] = useState(false);
   const [dismissedConfirmationSlots, setDismissedConfirmationSlots] = useState<IntakeMacroSlot[]>([]);
+  const [isImmersiveQaOpen, setIsImmersiveQaOpen] = useState(true);
 
   const feedbackRecords = useMemo<FeedbackRecord[]>(() => Object.entries(feedbackMap).map(([variantId, value]) => ({ variantId, value })), [feedbackMap]);
   const roundMode = getRoundMode(round);
@@ -521,6 +511,7 @@ export function SimulatorPage() {
   const activeOpeningFamily = currentOpeningStep < openingFamiliesForFirstTurns.length
     ? openingFamiliesForFirstTurns[currentOpeningStep]
     : undefined;
+  const authoritativeAgentState = currentAgentState ?? intentSnapshot?.conversationState.agentState ?? intentSnapshot?.analysis.agentState ?? null;
   const referenceAssets = useMemo(() => getReferenceAssets(assetSourceMode), [assetSourceMode]);
   const effectiveMatchMode = useMemo<"stable" | "explore">(() => {
     if (matchMode === "stable" || matchMode === "explore") return matchMode;
@@ -552,32 +543,39 @@ export function SimulatorPage() {
   const baseNearestRefs = useMemo(() => findNearestAnnotatedAssets(firstOrderFromState(baseState), referenceAssets, 3), [baseState, referenceAssets]);
   const preferenceRef = useMemo(() => {
     if (!preferenceCenter) return undefined;
-    if (effectiveMatchMode === "explore") return findExploratoryAnnotatedAssets(preferenceCenter, referenceAssets, { limit: 1, seenIds: seenRefIds, hardExcludeIds: blockedRefIds })[0];
+    if (effectiveMatchMode === "explore") {
+      return findExploratoryAnnotatedAssets(preferenceCenter, referenceAssets, { limit: 1, seenIds: seenRefIds, hardExcludeIds: blockedRefIds })[0];
+    }
     return findNearestAnnotatedAssets(preferenceCenter, referenceAssets, 1, { hardExcludeIds: blockedRefIds })[0];
   }, [preferenceCenter, referenceAssets, effectiveMatchMode, seenRefIds, blockedRefIds]);
 
   const variantNearestRefsMap = useMemo(() => {
     if (round <= PROBING_ROUND_LIMIT) {
-      // Probing rounds: use hypothesis-aware carrier assignment so each card
-      // genuinely represents a different exploration direction rather than
-      // clustering around the same nearest asset.
       return assignProbingCarriers(
         variants.map((variant) => ({
           key: variant.id,
           variantValues: firstOrderFromState(variant.state),
           changedSlots: variant.changedSlots.filter(
             (s): s is "color" | "motif" | "arrangement" =>
-              s === "color" || s === "motif" || s === "arrangement"
+              s === "color" || s === "motif" || s === "arrangement",
           ),
         })),
         referenceAssets,
-        { hardExcludeIds: blockedRefIds, seenIds: seenRefIds }
+        { hardExcludeIds: blockedRefIds, seenIds: seenRefIds },
       );
     }
     return assignDiverseNearestAnnotatedAssets(
       variants.map((variant) => ({ key: variant.id, values: firstOrderFromState(variant.state) })),
       referenceAssets,
-      { diversityPenalty: 0.2, nearDuplicatePenalty: 0.1, duplicateThreshold: 0.14, explorationSeenIds: seenRefIds, noveltyBonus: 0.14, mode: effectiveMatchMode, hardExcludeIds: blockedRefIds }
+      {
+        diversityPenalty: 0.2,
+        nearDuplicatePenalty: 0.1,
+        duplicateThreshold: 0.14,
+        explorationSeenIds: seenRefIds,
+        noveltyBonus: 0.14,
+        mode: effectiveMatchMode,
+        hardExcludeIds: blockedRefIds,
+      },
     );
   }, [variants, referenceAssets, seenRefIds, effectiveMatchMode, blockedRefIds, round]);
 
@@ -589,7 +587,7 @@ export function SimulatorPage() {
     setEntryText("");
     setIntentSnapshot(null);
     setEntryAnalysis(null);
-    setOpeningDraftAgentState(null);
+    setCurrentAgentState(null);
     setInitializationExplainability(null);
     setIsInspectExpanded(false);
     setSelectedRefInspect(null);
@@ -601,6 +599,7 @@ export function SimulatorPage() {
     setRejectedRefIds([]);
     setAssetPoolExhausted(false);
     setDismissedConfirmationSlots([]);
+    setIsImmersiveQaOpen(true);
   };
 
   const handleFeedback = (variantId: string, value: "liked" | "disliked") => {
@@ -629,12 +628,12 @@ export function SimulatorPage() {
         previousText: intentSnapshot?.text,
         signal,
         previousTurnCount: intentSnapshot?.turnCount ?? 0,
-        currentAgentStateOverride: openingDraftAgentState ?? undefined,
+        currentAgentStateOverride: authoritativeAgentState ?? undefined,
       });
 
       setIntentSnapshot(nextSnapshot);
       setEntryAnalysis(nextSnapshot.analysis);
-      setOpeningDraftAgentState(nextSnapshot.analysis.agentState ?? null);
+      setCurrentAgentState(nextSnapshot.analysis.agentState ?? null);
       setEntryText("");
     } finally {
       setIsIntentAnalyzing(false);
@@ -645,22 +644,23 @@ export function SimulatorPage() {
     await submitIntentText(entryText);
   };
 
-  const handleOpeningOptionClick = async (label: string, family: OpeningQuestionFamilyDefinition) => {
+  const handleOpeningOptionClick = async (label: string, _family: OpeningQuestionFamilyDefinition) => {
     const selectedOption = activeOpeningFamily?.options.find((option) => option.label === label);
-    if (selectedOption) {
-      const patched = applyOpeningSelectionToAgentState({
-        selections: [selectedOption],
-        currentState: openingDraftAgentState ?? intentSnapshot?.analysis.agentState ?? createIntentIntakeAgentState(),
-      });
-      setOpeningDraftAgentState(patched.updatedAgentState);
+    if (!selectedOption) {
+      return;
     }
 
-    const nextText = mergeOpeningSelectionText(entryText, label, family.allowsMultiple);
-    setEntryText(nextText);
-
-    if (!family.allowsMultiple) {
-      await submitIntentText(nextText);
-    }
+    const signal: OpeningSelectionSignal = {
+      type: "opening-selection",
+      selections: [selectedOption.id],
+      turnIndex: authoritativeAgentState?.turnIndex ?? 0,
+      source: "user",
+    };
+    const nextAgentState = await updateAgentStateFromSignal(
+      signal,
+      authoritativeAgentState ?? createIntentIntakeAgentState(),
+    );
+    setCurrentAgentState(nextAgentState);
   };
 
   const handleConfirmDirection = (slot: IntakeMacroSlot, choice: "confirm" | "defer") => {
@@ -703,6 +703,7 @@ export function SimulatorPage() {
     setSeenRefIds([]);
     setRejectedRefIds([]);
     setAssetPoolExhausted(false);
+    setIsImmersiveQaOpen(false);
   };
 
   const handleContinue = () => {
@@ -747,6 +748,286 @@ export function SimulatorPage() {
 
   const canContinue = feedbackRecords.length > 0 && !assetPoolExhausted;
 
+  const layoutModeToggle = (
+    <div className="inline-flex rounded-2xl border border-stone-300 bg-white p-1 text-xs">
+      <button
+        type="button"
+        onClick={() => setLayoutMode("default")}
+        className={`rounded-xl px-3 py-1.5 font-medium ${layoutMode === "default" ? "bg-stone-900 text-white" : "text-stone-600"}`}
+      >
+        当前版
+      </button>
+      <button
+        type="button"
+        onClick={() => setLayoutMode("immersive")}
+        className={`rounded-xl px-3 py-1.5 font-medium ${layoutMode === "immersive" ? "bg-stone-900 text-white" : "text-stone-600"}`}
+      >
+        少参数沉浸版
+      </button>
+    </div>
+  );
+
+  const intentComposer = (
+    <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Intent stabilization</div>
+      <div className="mt-2 text-sm leading-6 text-stone-600">先用 2-3 轮简短交流把方向收一收，再进入第一轮视觉探索。</div>
+      <textarea
+        value={entryText}
+        onChange={(event) => setEntryText(event.target.value)}
+        placeholder={intentSnapshot ? "顺着上面的问题继续回应即可" : "例如：想给卧室找一块更安静一点、不要太花的地毯"}
+        className="mt-4 min-h-[112px] w-full rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-stone-500 focus:bg-white"
+      />
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={handleContinueIntent}
+          disabled={isIntentAnalyzing}
+          className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white"
+        >
+          <Play className="h-4 w-4" /> {isIntentAnalyzing ? "分析中..." : intentSnapshot ? "继续回应" : "开始理解"}
+        </button>
+        <button
+          type="button"
+          onClick={handleStartFromText}
+          disabled={!intentSnapshot?.readyToGenerate}
+          className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Play className="h-4 w-4" /> 进入探索
+        </button>
+        <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-500">最多 7 轮，方向够稳后即可进入探索。</div>
+      </div>
+    </div>
+  );
+
+  const understandingPanel = (
+    <div className="rounded-[24px] border border-stone-200 bg-stone-50 p-4">
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Current understanding</div>
+      <div className="mt-3 space-y-3 text-sm text-stone-600">
+        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Current understanding</div>
+          <div className="mt-2 text-sm leading-6 text-stone-700">
+            {intentSnapshot?.currentUnderstanding ?? "前三轮会依次确认氛围、空间、图案这三条主轴；这一轮先只问一个维度。"}
+          </div>
+          {!intentSnapshot && authoritativeAgentState && authoritativeAgentState.slots.some((slot) => slot.topScore > 0) && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {authoritativeAgentState.slots
+                .filter((slot) => slot.topScore > 0)
+                .map((slot) => (
+                  <SlotPhasePill
+                    key={slot.slot}
+                    slot={{
+                      slot: slot.slot,
+                      phase: mapMacroStatusToDisplayPhase(slot.status),
+                      topScore: slot.topScore,
+                      topDirection: slot.topDirection,
+                    }}
+                  />
+                ))}
+            </div>
+          )}
+        </div>
+        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Next question</div>
+          <div className="mt-2 text-sm leading-6 text-stone-700">
+            {activeOpeningFamily
+              ? formatOpeningPromptForPanel(activeOpeningFamily.family.prompt)
+              : (intentSnapshot?.followUpQuestion ?? "我会先抓最值得确认的一点，再问你下一句。")}
+          </div>
+          {activeOpeningFamily && (
+            <div className="mt-3">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500">
+                Turn {currentOpeningStep + 1} · {activeOpeningFamily.family.family}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {activeOpeningFamily.options.map((option) => {
+                  const selected = entryText.includes(option.label);
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => void handleOpeningOptionClick(option.label, activeOpeningFamily.family)}
+                      className={`rounded-xl border px-3 py-1.5 text-xs transition ${
+                        selected ? "border-stone-900 bg-stone-900 text-white" : "border-stone-300 bg-stone-50 text-stone-700 hover:bg-white"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {activeOpeningFamily.family.allowsMultiple && (
+                <div className="mt-2 text-xs text-stone-500">可先点 1-2 个选项，它们会直接填入上面的输入框，再点“开始理解”。</div>
+              )}
+            </div>
+          )}
+        </div>
+        {intentSnapshot?.analysis.intakeGoalState && (
+          <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">槽位进度</div>
+            <div className="flex flex-wrap gap-1.5">
+              {intentSnapshot.analysis.intakeGoalState.slots.map((slot) => (
+                <SlotPhasePill key={slot.slot} slot={slot} />
+              ))}
+            </div>
+          </div>
+        )}
+        {(() => {
+          const pending = (intentSnapshot?.analysis.intakeGoalState?.pendingConfirmations ?? []).filter(
+            (c) => !dismissedConfirmationSlots.includes(c.slot),
+          );
+          if (pending.length === 0) return null;
+          return (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">需要确认方向</div>
+              <div className="space-y-3">
+                {pending.map((confirmation) => (
+                  <div key={confirmation.slot}>
+                    <div className="text-sm leading-5 text-stone-700">{confirmation.prompt}</div>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmDirection(confirmation.slot, "confirm")}
+                        className="rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-medium text-white"
+                      >
+                        确认方向
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmDirection(confirmation.slot, "defer")}
+                        className="rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700"
+                      >
+                        先看其他
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+        <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
+          <div className="mb-1">
+            分析状态：
+            <span className="ml-1 font-semibold text-stone-700">
+              {isIntentAnalyzing ? "analyzing with semantic pipeline..." : conversationStateLogSummary?.questionPlanning.llmStatus ?? "waiting for input"}
+            </span>
+          </div>
+          当前轮次：{intentSnapshot?.turnCount ?? 0}/5
+          <div className="mt-1">
+            {intentSnapshot?.readyToGenerate ? "当前方向已经足够粗稳，可以进入第一轮探索。" : "还不会立刻进入探索，先把最关键的一点再收清楚。"}
+          </div>
+          {!isIntentAnalyzing && conversationStateLogSummary?.questionPlanning.llmSummary && (
+            <div className="mt-2 text-stone-500">{conversationStateLogSummary.questionPlanning.llmSummary}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const selectedInspectPanel = selectedRefInspect ? (
+    <MatchedRefInspectPanel
+      asset={selectedRefInspect.asset}
+      baseState={baseState}
+      label={selectedRefInspect.label}
+      onClose={() => setSelectedRefInspect(null)}
+    />
+  ) : null;
+
+  const currentVariantsList = (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Current variants</div>
+          <div className="mt-1 text-sm text-stone-600">点击继续生成下一轮后：liked 保留到下方，disliked 消失，新出现的素材不会重复，直到素材池穷尽。</div>
+        </div>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-2">
+        {variants.map((variant) => (
+          <VariantCardView
+            key={variant.id}
+            variant={variant}
+            feedback={feedbackMap[variant.id]}
+            matchedAsset={variantNearestRefsMap[variant.id]?.[0]}
+            onFeedback={handleFeedback}
+            onFinalize={(nextFinal) => setFinalChoice(nextFinal)}
+            onInspectRef={(asset) => setSelectedRefInspect({ label: `${variant.label} matched ref`, asset })}
+          />
+        ))}
+      </div>
+    </div>
+  );
+
+  const previouslyLikedList = likedHistory.length > 0 ? (
+    <div>
+      <div className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Previously liked</div>
+      <div className="grid gap-5 xl:grid-cols-2">
+        {likedHistory.map((item) => (
+          <VariantCardView key={item.id} variant={item.variant} matchedAsset={item.matchedAsset} likedPinned />
+        ))}
+      </div>
+    </div>
+  ) : (
+    <div className="text-sm text-stone-500">还没有累计 liked 结果，先在当前列表里标记喜欢项。</div>
+  );
+
+  if (layoutMode === "immersive") {
+    return (
+      <div className="h-screen overflow-hidden bg-[linear-gradient(180deg,#f7f3ee_0%,#efe7dc_100%)] text-stone-900">
+        <div className="fixed inset-x-0 top-0 z-40 border-b border-stone-200 bg-white/88 backdrop-blur-md">
+          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-6 py-4 lg:px-8">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.28em] text-stone-500">carpet gen simulator</div>
+              <div className="mt-1 text-xl font-semibold text-stone-900">参数闭环数值模拟器</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {layoutModeToggle}
+              <div className="rounded-2xl border border-stone-200 bg-white px-4 py-2 text-sm text-stone-600">Round <span className="font-semibold text-stone-900">{round}</span></div>
+              <button
+                type="button"
+                onClick={() => setIsImmersiveQaOpen((prev) => !prev)}
+                className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700"
+              >
+                {isImmersiveQaOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                {isImmersiveQaOpen ? "收起问答面板" : "展开问答面板"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {isImmersiveQaOpen && (
+          <div className="fixed left-1/2 top-24 z-30 w-[min(720px,calc(100vw-2rem))] -translate-x-1/2">
+            <div className="rounded-[32px] border border-stone-200 bg-white/94 p-5 shadow-lg backdrop-blur-md">
+              {understandingPanel}
+            </div>
+          </div>
+        )}
+
+        <div className={`mx-auto h-full max-w-[1600px] px-6 pb-[240px] pt-28 lg:px-8 ${isImmersiveQaOpen ? "pt-[680px]" : "pt-28"}`}>
+          <div className="grid h-full gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="rounded-[28px] border border-stone-200 bg-white/78 p-5 shadow-sm backdrop-blur-sm">
+              <div className="h-full pr-1">{currentVariantsList}</div>
+            </div>
+            <div className="rounded-[28px] border border-stone-200 bg-white/78 p-5 shadow-sm backdrop-blur-sm">
+              <div className="h-full overflow-y-auto pr-1">{previouslyLikedList}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white/92 backdrop-blur-md">
+          <div className="mx-auto max-w-[1600px] px-6 py-4 lg:px-8">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
+              <div>{intentComposer}</div>
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <button onClick={handleReset} className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-4 py-3 text-sm font-medium text-stone-700"><RefreshCw className="h-4 w-4" /> 重置</button>
+                <button onClick={handleContinue} disabled={!canContinue} className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"><Play className="h-4 w-4" /> 继续生成下一轮</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#f7f3ee_0%,#f1ebe2_100%)] text-stone-900">
       <div className="mx-auto max-w-7xl px-6 py-8 lg:px-10">
@@ -757,6 +1038,7 @@ export function SimulatorPage() {
             <p className="mt-3 max-w-3xl text-sm leading-6 text-stone-600">先不接真实生图。这里先模拟：随机 base → 变体卡牌 → 喜欢/不喜欢反馈 → reducer 风格更新 → 下一轮参数。</p>
           </div>
           <div className="flex flex-wrap gap-3">
+            {layoutModeToggle}
             <button onClick={handleReset} className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-4 py-3 text-sm font-medium text-stone-700"><RefreshCw className="h-4 w-4" /> 重置</button>
             <button onClick={handleContinue} disabled={!canContinue} className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"><Play className="h-4 w-4" /> 继续生成下一轮</button>
           </div>
@@ -764,166 +1046,8 @@ export function SimulatorPage() {
 
         <div className="mb-6 rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
           <div className="grid gap-5 lg:grid-cols-[1.3fr_0.9fr]">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Intent stabilization</div>
-              <div className="mt-2 text-sm leading-6 text-stone-600">
-                先用 2-3 轮简短交流把方向收一收，再进入第一轮视觉探索。
-              </div>
-              <textarea
-                value={entryText}
-                onChange={(event) => setEntryText(event.target.value)}
-                placeholder={intentSnapshot ? "顺着上面的问题继续回应即可" : "例如：想给卧室找一块更安静一点、不要太花的地毯"}
-                className="mt-4 min-h-[112px] w-full rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-stone-500 focus:bg-white"
-              />
-              <div className="mt-4 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={handleContinueIntent}
-                  disabled={isIntentAnalyzing}
-                  className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white"
-                >
-                  <Play className="h-4 w-4" /> {isIntentAnalyzing ? "分析中..." : intentSnapshot ? "继续回应" : "开始理解"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleStartFromText}
-                  disabled={!intentSnapshot?.readyToGenerate}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Play className="h-4 w-4" /> 进入探索
-                </button>
-                <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-500">
-                  最多 7 轮，方向够稳后即可进入探索。
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-[24px] border border-stone-200 bg-stone-50 p-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Current understanding</div>
-              <div className="mt-3 space-y-3 text-sm text-stone-600">
-                <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Current understanding</div>
-                  <div className="mt-2 text-sm leading-6 text-stone-700">
-                    {intentSnapshot?.currentUnderstanding ?? "前三轮会依次确认氛围、空间、图案这三条主轴；这一轮先只问一个维度。"}
-                  </div>
-                  {!intentSnapshot && openingDraftAgentState && openingDraftAgentState.slots.some((slot) => slot.topScore > 0) && (
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {openingDraftAgentState.slots
-                        .filter((slot) => slot.topScore > 0)
-                        .map((slot) => (
-                          <SlotPhasePill
-                            key={slot.slot}
-                            slot={{
-                              slot: slot.slot,
-                              phase: mapMacroStatusToDisplayPhase(slot.status),
-                              topScore: slot.topScore,
-                              topDirection: slot.topDirection,
-                            }}
-                          />
-                        ))}
-                    </div>
-                  )}
-                </div>
-                <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Next question</div>
-                  <div className="mt-2 text-sm leading-6 text-stone-700">
-                    {activeOpeningFamily
-                      ? formatOpeningPromptForPanel(activeOpeningFamily.family.prompt)
-                      : (intentSnapshot?.followUpQuestion ?? "我会先抓最值得确认的一点，再问你下一句。")}
-                  </div>
-                  {activeOpeningFamily && (
-                    <div className="mt-3">
-                      <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500">
-                        Turn {currentOpeningStep + 1} · {activeOpeningFamily.family.family}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {activeOpeningFamily.options.map((option) => {
-                          const selected = entryText.includes(option.label);
-                          return (
-                            <button
-                              key={option.id}
-                              type="button"
-                              onClick={() => void handleOpeningOptionClick(option.label, activeOpeningFamily.family)}
-                              className={`rounded-xl border px-3 py-1.5 text-xs transition ${
-                                selected
-                                  ? "border-stone-900 bg-stone-900 text-white"
-                                  : "border-stone-300 bg-stone-50 text-stone-700 hover:bg-white"
-                              }`}
-                            >
-                              {option.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {activeOpeningFamily.family.allowsMultiple && (
-                        <div className="mt-2 text-xs text-stone-500">可先点 1-2 个选项，它们会直接填入上面的输入框，再点“开始理解”。</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {intentSnapshot?.analysis.intakeGoalState && (
-                  <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">槽位进度</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {intentSnapshot.analysis.intakeGoalState.slots.map((slot) => (
-                        <SlotPhasePill key={slot.slot} slot={slot} />
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {(() => {
-                  const pending = (intentSnapshot?.analysis.intakeGoalState?.pendingConfirmations ?? []).filter(
-                    (c) => !dismissedConfirmationSlots.includes(c.slot),
-                  );
-                  if (pending.length === 0) return null;
-                  return (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">需要确认方向</div>
-                      <div className="space-y-3">
-                        {pending.map((confirmation) => (
-                          <div key={confirmation.slot}>
-                            <div className="text-sm leading-5 text-stone-700">{confirmation.prompt}</div>
-                            <div className="mt-2 flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleConfirmDirection(confirmation.slot, "confirm")}
-                                className="rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-medium text-white"
-                              >
-                                确认方向
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleConfirmDirection(confirmation.slot, "defer")}
-                                className="rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700"
-                              >
-                                先看其他
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
-                <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
-                  <div className="mb-1">
-                    分析状态：
-                    <span className="ml-1 font-semibold text-stone-700">
-                      {isIntentAnalyzing ? "analyzing with semantic pipeline..." : conversationStateLogSummary?.questionPlanning.llmStatus ?? "waiting for input"}
-                    </span>
-                  </div>
-                  当前轮次：{intentSnapshot?.turnCount ?? 0}/5
-                  <div className="mt-1">
-                    {intentSnapshot?.readyToGenerate
-                      ? "当前方向已经足够粗稳，可以进入第一轮探索。"
-                      : "还不会立刻进入探索，先把最关键的一点再收清楚。"}
-                  </div>
-                  {!isIntentAnalyzing && conversationStateLogSummary?.questionPlanning.llmSummary && (
-                    <div className="mt-2 text-stone-500">{conversationStateLogSummary.questionPlanning.llmSummary}</div>
-                  )}
-                </div>
-              </div>
-            </div>
+            <div>{intentComposer}</div>
+            <div>{understandingPanel}</div>
           </div>
 
           {conversationStateLogSummary && (
@@ -940,7 +1064,13 @@ export function SimulatorPage() {
         <div className="grid gap-6 lg:grid-cols-[1.1fr_1.6fr]">
           <div className="space-y-6">
             <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center justify-between"><div><div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Base State</div><div className="mt-1 text-lg font-semibold text-stone-900">Round {round}</div></div>{finalChoice && <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">已选最终方案</div>}</div>
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Base state</div>
+                  <div className="mt-1 text-lg font-semibold text-stone-900">Round {round}</div>
+                </div>
+                {finalChoice && <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">已选最终方案</div>}
+              </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <MatchedFuliPreview
                   title="Base ref"
@@ -957,34 +1087,82 @@ export function SimulatorPage() {
                   <span>本轮类型：</span><span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${roundMode === "direct" ? "bg-stone-900 text-white" : "bg-amber-100 text-amber-800"}`}>{roundMode}</span>
                   <span>主更新对象：</span><span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-800">{primarySlot}</span>
                   <span>匹配模式：</span>
-                  <span className="inline-flex rounded-full border border-stone-200 bg-white p-1 text-xs"><button onClick={() => setMatchMode("auto")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "auto" ? "bg-stone-900 text-white" : "text-stone-600"}`}>auto</button><button onClick={() => setMatchMode("stable")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "stable" ? "bg-stone-900 text-white" : "text-stone-600"}`}>stable</button><button onClick={() => setMatchMode("explore")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "explore" ? "bg-stone-900 text-white" : "text-stone-600"}`}>explore</button></span>
+                  <span className="inline-flex rounded-full border border-stone-200 bg-white p-1 text-xs">
+                    <button onClick={() => setMatchMode("auto")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "auto" ? "bg-stone-900 text-white" : "text-stone-600"}`}>auto</button>
+                    <button onClick={() => setMatchMode("stable")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "stable" ? "bg-stone-900 text-white" : "text-stone-600"}`}>stable</button>
+                    <button onClick={() => setMatchMode("explore")} className={`rounded-full px-3 py-1 font-medium ${matchMode === "explore" ? "bg-stone-900 text-white" : "text-stone-600"}`}>explore</button>
+                  </span>
                 </div>
-                <div className="mt-3 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs text-stone-600">当前生效模式：<span className="font-semibold text-stone-800">{effectiveMatchMode}</span>{matchMode === "auto" && <span> · auto 在前两轮默认更 explorative，后续逐步转稳</span>}<div className="mt-2 text-stone-500">Preference ref 只在点击“继续生成下一轮”后，基于已提交的 liked anchors 更新。</div>{assetPoolExhausted && <div className="mt-2 font-medium text-amber-700">素材池已穷尽。重置试试。</div>}</div>
+                <div className="mt-3 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs text-stone-600">
+                  当前生效模式：<span className="font-semibold text-stone-800">{effectiveMatchMode}</span>
+                  {matchMode === "auto" && <span> · auto 在前两轮默认更 explorative，后续逐步转稳</span>}
+                  <div className="mt-2 text-stone-500">Preference ref 只在点击“继续生成下一轮”后，基于已提交的 liked anchors 更新。</div>
+                  {assetPoolExhausted && <div className="mt-2 font-medium text-amber-700">素材池已穷尽。重置试试。</div>}
+                </div>
                 <p className="mt-3 text-sm leading-6 text-stone-600">{roundExplanation.description}</p>
               </div>
-              <div className="mt-4 space-y-3"><div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Direct visual controls</div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"><SlotSnapshot title="Color" values={baseState.color} tone="direct" highlighted={primarySlot === "color"} /><SlotSnapshot title="Motif" values={baseState.motif} tone="direct" highlighted={primarySlot === "motif"} /><SlotSnapshot title="Arrangement" values={baseState.arrangement} tone="direct" highlighted={primarySlot === "arrangement"} /></div><div className="pt-2 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Modulation state</div><div className="grid gap-3 md:grid-cols-2"><SlotSnapshot title="Impression" values={baseState.impression} tone="meta" highlighted={primarySlot === "impression"} /><SlotSnapshot title="Style" values={baseState.style} tone="meta" highlighted={primarySlot === "style"} /></div></div>
+              <div className="mt-4 space-y-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Direct visual controls</div>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <SlotSnapshot title="Color" values={baseState.color} tone="direct" highlighted={primarySlot === "color"} />
+                  <SlotSnapshot title="Motif" values={baseState.motif} tone="direct" highlighted={primarySlot === "motif"} />
+                  <SlotSnapshot title="Arrangement" values={baseState.arrangement} tone="direct" highlighted={primarySlot === "arrangement"} />
+                </div>
+                <div className="pt-2 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Modulation state</div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <SlotSnapshot title="Impression" values={baseState.impression} tone="meta" highlighted={primarySlot === "impression"} />
+                  <SlotSnapshot title="Style" values={baseState.style} tone="meta" highlighted={primarySlot === "style"} />
+                </div>
+              </div>
             </div>
 
-            <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between gap-3"><div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Closest FULI refs</div><div className="inline-flex rounded-full border border-stone-200 bg-stone-50 p-1 text-xs"><button onClick={() => setAssetSourceMode("core-only")} className={`rounded-full px-3 py-1 font-medium ${assetSourceMode === "core-only" ? "bg-stone-900 text-white" : "text-stone-600"}`}>core only</button><button onClick={() => setAssetSourceMode("core+extended")} className={`rounded-full px-3 py-1 font-medium ${assetSourceMode === "core+extended" ? "bg-stone-900 text-white" : "text-stone-600"}`}>core + extended</button></div></div><div className="mb-4 rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">当前 source：<span className="font-semibold text-stone-800">{assetSourceMode}</span> · blocked refs {blockedRefIds.length}/{totalAnnotatedAssetCount}</div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{baseNearestRefs.map((asset) => <div key={asset.imageId} className="space-y-2"><RefAssetCard asset={asset} /><div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-500">confidence {asset.annotation?.confidence ?? "n/a"}</div></div>)}</div></div>
+            <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Closest FULI refs</div>
+                <div className="inline-flex rounded-full border border-stone-200 bg-stone-50 p-1 text-xs">
+                  <button onClick={() => setAssetSourceMode("core-only")} className={`rounded-full px-3 py-1 font-medium ${assetSourceMode === "core-only" ? "bg-stone-900 text-white" : "text-stone-600"}`}>core only</button>
+                  <button onClick={() => setAssetSourceMode("core+extended")} className={`rounded-full px-3 py-1 font-medium ${assetSourceMode === "core+extended" ? "bg-stone-900 text-white" : "text-stone-600"}`}>core + extended</button>
+                </div>
+              </div>
+              <div className="mb-4 rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">当前 source：<span className="font-semibold text-stone-800">{assetSourceMode}</span> · blocked refs {blockedRefIds.length}/{totalAnnotatedAssetCount}</div>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {baseNearestRefs.map((asset) => (
+                  <div key={asset.imageId} className="space-y-2">
+                    <RefAssetCard asset={asset} />
+                    <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-500">confidence {asset.annotation?.confidence ?? "n/a"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
 
-            <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm"><div className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Liked anchors</div>{anchors.length === 0 ? <p className="text-sm text-stone-500">还没有保留下来的喜欢卡牌。先在当前 round 里标记喜欢项。</p> : <div className="space-y-3">{anchors.map((anchor) => <div key={`${anchor.id}-${anchor.round}`} className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3"><div className="flex items-center justify-between text-sm font-medium text-stone-800"><span>{anchor.label}</span><span className="text-xs text-stone-500">Round {anchor.round}</span></div><div className="mt-1 text-xs text-stone-500">{anchor.summary}</div></div>)}</div>}</div>
-            {finalChoice && <div className="rounded-[28px] border border-amber-200 bg-amber-50/80 p-5 shadow-sm"><div className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-800"><Trophy className="h-4 w-4" /> 最终选择</div><div className="text-sm text-stone-700">{finalChoice.label}</div><div className="mt-1 text-xs text-stone-500">{finalChoice.summary}</div></div>}
+            <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Liked anchors</div>
+              {anchors.length === 0 ? (
+                <p className="text-sm text-stone-500">还没有保留下来的喜欢卡牌。先在当前 round 里标记喜欢项。</p>
+              ) : (
+                <div className="space-y-3">
+                  {anchors.map((anchor) => (
+                    <div key={`${anchor.id}-${anchor.round}`} className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
+                      <div className="flex items-center justify-between text-sm font-medium text-stone-800"><span>{anchor.label}</span><span className="text-xs text-stone-500">Round {anchor.round}</span></div>
+                      <div className="mt-1 text-xs text-stone-500">{anchor.summary}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {finalChoice && (
+              <div className="rounded-[28px] border border-amber-200 bg-amber-50/80 p-5 shadow-sm">
+                <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-800"><Trophy className="h-4 w-4" /> 最终选择</div>
+                <div className="text-sm text-stone-700">{finalChoice.label}</div>
+                <div className="mt-1 text-xs text-stone-500">{finalChoice.summary}</div>
+              </div>
+            )}
           </div>
 
           <div>
-            {selectedRefInspect && (
-              <div className="mb-5">
-                <MatchedRefInspectPanel
-                  asset={selectedRefInspect.asset}
-                  baseState={baseState}
-                  label={selectedRefInspect.label}
-                  onClose={() => setSelectedRefInspect(null)}
-                />
-              </div>
-            )}
-            <div className="mb-4 flex items-center justify-between"><div><div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Current variants</div><div className="mt-1 text-sm text-stone-600">点击继续生成下一轮后：liked 保留到下方，disliked 消失，新出现的素材不会重复，直到素材池穷尽。</div></div></div>
-            <div className="grid gap-5 xl:grid-cols-2">{variants.map((variant) => <VariantCardView key={variant.id} variant={variant} feedback={feedbackMap[variant.id]} matchedAsset={variantNearestRefsMap[variant.id]?.[0]} onFeedback={handleFeedback} onFinalize={(nextFinal) => setFinalChoice(nextFinal)} onInspectRef={(asset) => setSelectedRefInspect({ label: `${variant.label} matched ref`, asset })} />)}</div>
-            {likedHistory.length > 0 && <div className="mt-6"><div className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Previously liked</div><div className="grid gap-5 xl:grid-cols-2">{likedHistory.map((item) => <VariantCardView key={item.id} variant={item.variant} matchedAsset={item.matchedAsset} likedPinned />)}</div></div>}
+            {selectedInspectPanel && <div className="mb-5">{selectedInspectPanel}</div>}
+            {currentVariantsList}
+            {likedHistory.length > 0 && <div className="mt-6">{previouslyLikedList}</div>}
           </div>
         </div>
       </div>

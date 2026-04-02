@@ -8,6 +8,7 @@ import type {
   IntakeSlotProgress,
   IntentIntakeGoalState,
   PatternIntentState,
+  QuestionResolution,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,15 @@ function mapFieldToMacroSlot(field: HighValueField | undefined): IntakeMacroSlot
   if (field === "patternTendency") return "pattern";
   if (field === "arrangementTendency") return "arrangement";
   if (field === "spaceContext") return "space";
+  return undefined;
+}
+
+function mapMacroSlotToField(slot: IntakeMacroSlot): HighValueField | undefined {
+  if (slot === "impression") return "overallImpression";
+  if (slot === "color") return "colorMood";
+  if (slot === "pattern") return "patternTendency";
+  if (slot === "arrangement") return "arrangementTendency";
+  if (slot === "space") return "spaceContext";
   return undefined;
 }
 
@@ -114,12 +124,92 @@ function extractPatternIntent(rawCues: string[]): PatternIntentState | undefined
   return { keyElement, abstractionPreference, renderingMode, motionFeeling };
 }
 
+function collectPatternIntentSourceCues(analysis: EntryAgentResult) {
+  return [
+    ...(analysis.semanticCanvas?.rawCues ?? []),
+    ...(analysis.semanticCanvas?.narrativePolicy.mustPreserve ?? []),
+    ...analysis.interpretationMerge.finalResolvedReadings
+      .filter((reading) => reading.field === "patternTendency")
+      .flatMap((reading) => reading.matchedCues),
+  ];
+}
+
+function derivePatternIntentFromResolution(resolution: QuestionResolution | undefined): Partial<PatternIntentState> | undefined {
+  if (!resolution?.chosenBranch || !resolution.familyId.startsWith("patternTendency:")) {
+    return undefined;
+  }
+
+  if (resolution.chosenBranch === "geometry") {
+    return {
+      abstractionPreference: "semi-abstract",
+      renderingMode: "geometricized",
+    };
+  }
+
+  if (resolution.chosenBranch === "complexity") {
+    return {
+      abstractionPreference: "abstract",
+      renderingMode: "suggestive",
+    };
+  }
+
+  return undefined;
+}
+
+function mergePatternIntent(
+  previous: PatternIntentState | undefined,
+  next: Partial<PatternIntentState> | undefined,
+): PatternIntentState | undefined {
+  if (!previous && !next) {
+    return undefined;
+  }
+
+  return {
+    abstractionPreference: next?.abstractionPreference ?? previous?.abstractionPreference ?? "abstract",
+    keyElement: next?.keyElement ?? previous?.keyElement,
+    renderingMode: next?.renderingMode ?? previous?.renderingMode,
+    motionFeeling: next?.motionFeeling ?? previous?.motionFeeling,
+  };
+}
+
+function getLatestResolutionForSlot(analysis: EntryAgentResult, slot: IntakeMacroSlot): QuestionResolution | undefined {
+  const field = mapMacroSlotToField(slot);
+  if (!field) {
+    return undefined;
+  }
+
+  return Object.values(analysis.questionResolutionState?.families ?? {})
+    .filter((resolution) => resolution.familyId.startsWith(`${field}:`))
+    .sort((left, right) => right.sourceTurn - left.sourceTurn)[0];
+}
+
+function getResolutionSeedForSlot(
+  analysis: EntryAgentResult,
+  slot: IntakeMacroSlot,
+): { label?: string; score: number; supportingSignals: string[] } | undefined {
+  const resolution = getLatestResolutionForSlot(analysis, slot);
+  if (!resolution?.chosenBranch) {
+    return undefined;
+  }
+
+  return {
+    label: resolution.chosenBranch,
+    score: resolution.status === "resolved" ? 0.78 : 0.64,
+    supportingSignals: [resolution.familyId, `resolution:${resolution.chosenBranch}`],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Top direction per slot
 // ---------------------------------------------------------------------------
 
 function getTopDirectionForSlot(input: { analysis: EntryAgentResult; slot: IntakeMacroSlot }) {
   const { analysis, slot } = input;
+  const resolutionSeed = getResolutionSeedForSlot(analysis, slot);
+
+  if (resolutionSeed) {
+    return resolutionSeed;
+  }
 
   const confirmedCandidate = analysis.semanticUnderstanding.confirmedDirections.find((direction) =>
     direction.sourceReadingIds.some((readingId) => {
@@ -152,17 +242,6 @@ function getTopDirectionForSlot(input: { analysis: EntryAgentResult; slot: Intak
   const openGap = analysis.semanticGaps.find((gap) => mapFieldToMacroSlot(gap.targetField) === slot);
   if (openGap) {
     return { label: undefined, score: 0.2, supportingSignals: openGap.evidence.slice(0, 2) };
-  }
-
-  const latestResolution = Object.values(analysis.questionResolutionState?.families ?? {})
-    .filter((resolution) => mapFieldToMacroSlot((resolution.familyId.split(":")[0] as HighValueField | undefined)) === slot)
-    .sort((left, right) => right.sourceTurn - left.sourceTurn)[0];
-  if (latestResolution?.chosenBranch) {
-    return {
-      label: latestResolution.chosenBranch,
-      score: latestResolution.status === "resolved" ? 0.78 : 0.62,
-      supportingSignals: [latestResolution.familyId],
-    };
   }
 
   if (slot === "impression") {
@@ -240,10 +319,38 @@ function buildSlotProgress(
 
   // Pattern intent: extract from semantic canvas rawCues
   if (slot === "pattern") {
-    const rawCues = analysis.semanticCanvas?.rawCues ?? [];
-    const patternIntent = extractPatternIntent(rawCues);
+    const rawCues = collectPatternIntentSourceCues(analysis);
+    const latestResolution = getLatestResolutionForSlot(analysis, slot);
+    const patternIntent = mergePatternIntent(
+      previousSlot?.patternIntent,
+      mergePatternIntent(
+        extractPatternIntent(rawCues),
+        derivePatternIntentFromResolution(latestResolution),
+      ),
+    );
     if (patternIntent) {
       result.patternIntent = patternIntent;
+      if (!result.topDirection) {
+        result.topDirection = patternIntent.keyElement ?? patternIntent.renderingMode ?? patternIntent.abstractionPreference;
+      }
+      if (result.topScore < BASE_CAPTURE_THRESHOLD) {
+        const structuralSignals = [
+          patternIntent.keyElement ? `pattern:key-element:${patternIntent.keyElement}` : undefined,
+          patternIntent.renderingMode ? `pattern:rendering:${patternIntent.renderingMode}` : undefined,
+          patternIntent.abstractionPreference ? `pattern:abstraction:${patternIntent.abstractionPreference}` : undefined,
+          patternIntent.motionFeeling ? `pattern:motion:${patternIntent.motionFeeling}` : undefined,
+        ].filter(Boolean) as string[];
+        const structuralDepth = [
+          patternIntent.keyElement,
+          patternIntent.renderingMode,
+          patternIntent.abstractionPreference,
+          patternIntent.motionFeeling,
+        ].filter(Boolean).length;
+        result.supportingSignals = [...new Set([...result.supportingSignals, ...structuralSignals])];
+        result.topScore = Number(Math.max(result.topScore, Math.min(0.8, 0.34 + structuralDepth * 0.12)).toFixed(2));
+        result.phase = computePhase(result.topScore, result.supportingSignals);
+        result.isBaseCaptured = result.phase === "base-captured" || result.phase === "lock-candidate";
+      }
     }
   }
 
@@ -258,17 +365,10 @@ function computeReadyForFirstGeneration(slots: IntakeSlotProgress[]): { ready: b
   const impression = slots.find((s) => s.slot === "impression");
   const pattern = slots.find((s) => s.slot === "pattern");
   const color = slots.find((s) => s.slot === "color");
+  const arrangement = slots.find((s) => s.slot === "arrangement");
 
-  // Condition A: impression + (pattern OR color) both base-captured
-  if (impression?.isBaseCaptured && (pattern?.isBaseCaptured || color?.isBaseCaptured)) {
-    const second = pattern?.isBaseCaptured ? "pattern" : "color";
-    return { ready: true, reason: `impression and ${second} both have base directions` };
-  }
-
-  // Condition B: any 3 critical slots base-captured
-  const capturedCount = slots.filter((s) => CRITICAL_SLOTS.includes(s.slot) && s.isBaseCaptured).length;
-  if (capturedCount >= 3) {
-    return { ready: true, reason: "3 or more critical slots have base directions" };
+  if (impression?.isBaseCaptured && pattern?.isBaseCaptured && color?.isBaseCaptured && arrangement?.isBaseCaptured) {
+    return { ready: true, reason: "all critical macro slots have base directions" };
   }
 
   return { ready: false, reason: "core slot directions not yet established" };
