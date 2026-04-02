@@ -94,6 +94,37 @@ async function runPoeticReplyClosureCase() {
   };
 }
 
+async function runCumulativeReplyStyleCase() {
+  const first = await buildIntentStabilizationSnapshot({
+    signal: makeTextSignal("自然", 1),
+  });
+  const second = await buildIntentStabilizationSnapshot({
+    previousSnapshot: first,
+    previousText: first.text,
+    signal: makeTextSignal("烟雨三月", first.turnCount + 1),
+    previousTurnCount: first.turnCount,
+  });
+  const third = await buildIntentStabilizationSnapshot({
+    previousSnapshot: second,
+    previousText: second.text,
+    signal: makeTextSignal("水汽流动感", second.turnCount + 1),
+    previousTurnCount: second.turnCount,
+  });
+
+  return {
+    name: "reply style keeps a cumulative design snapshot instead of state-transition logging",
+    checks: {
+      noStateTransitionPhrase: !third.expertReply.includes("先往"),
+      noGenerationPlaceholder: !third.expertReply.includes("先进入第一轮看看"),
+      cumulativeReplyMentionsCalmOrNatural:
+        third.expertReply.includes("安静") || third.expertReply.includes("自然"),
+      cumulativeReplyMentionsFlow:
+        third.expertReply.includes("流线") || third.expertReply.includes("流动"),
+      cumulativeReplyStillAsksOneQuestion: third.expertReply.includes("？"),
+    },
+  };
+}
+
 async function runCumulativeCanvasCase() {
   const first = await buildIntentStabilizationSnapshot({
     signal: makeTextSignal("草色遥看近却无", 1),
@@ -222,6 +253,7 @@ export async function buildMultiTurnIntentSpecSummary(): Promise<MultiTurnSpecRe
     runThreadSwitchCase(),
     runAdvanceCase(),
     runPoeticReplyClosureCase(),
+    runCumulativeReplyStyleCase(),
     runCumulativeCanvasCase(),
     runOpeningSeedCase(),
     runResolutionFeedsGoalCase(),

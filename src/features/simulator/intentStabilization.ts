@@ -1,6 +1,6 @@
 import { buildDerivedEntryAnalysisFromAgentState, type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeAgentState, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
 import { processIntakeSignal } from "@/features/entryAgent/signalProcessor";
-import { renderPersonaQuestionBridge, renderPersonaUnderstanding } from "./personaRenderer";
+import { renderPersonaUnderstanding } from "./personaRenderer";
 import { buildUnderstandingSummary, renderUnderstandingSummary } from "./understandingSummary";
 
 /** Goal-state drives generation; turn counts are safety caps only. */
@@ -258,95 +258,282 @@ function buildCumulativeUnderstanding(input: {
   return getSemanticUnderstandingNarrative(input.analysis);
 }
 
-function mapFieldToFriendlyLabel(field: HighValueField | undefined) {
-  if (field === "overallImpression") return "整体气质";
-  if (field === "colorMood") return "颜色层";
-  if (field === "patternTendency") return "图案语言";
-  if (field === "arrangementTendency") return "排布方式";
-  if (field === "spaceContext") return "使用场景";
-  return "方向";
+function trimQuestionPrompt(prompt: string) {
+  return prompt
+    .replace(/“?\w+Tendency”?/g, "")
+    .replace(/如果先挂到[^，。]*这一层，?/g, "")
+    .replace(/如果先不谈细节，?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function buildShiftSummary(input: {
+function hasCue(canvas: FuliSemanticCanvas | undefined, cues: string[]) {
+  const text = [
+    ...(canvas?.rawCues ?? []),
+    ...(canvas?.narrativePolicy.mustPreserve ?? []),
+    ...(canvas?.designTranslations.colorIdentity ?? []),
+    ...(canvas?.designTranslations.impressionTone ?? []),
+  ].join(" ");
+  return cues.some((cue) => text.includes(cue));
+}
+
+function hasCumulativeTextCue(analysis: EntryAgentResult, canvas: FuliSemanticCanvas | undefined, cues: string[]) {
+  const cumulativeText = analysis.agentState?.cumulativeText ?? "";
+  return hasCue(canvas, cues) || cues.some((cue) => cumulativeText.includes(cue));
+}
+
+function dedupeByStem(parts: string[]) {
+  const stems = new Set<string>();
+  const result: string[] = [];
+
+  for (const part of parts) {
+    const stem = part.replace(/[，。、“”\s]/g, "");
+    if (stems.has(stem)) continue;
+    stems.add(stem);
+    result.push(part);
+  }
+
+  return result;
+}
+
+function describePatternKeyElement(keyElement: string | undefined) {
+  if (keyElement === "cloud-mist") return "图案像雾气一样轻轻铺开";
+  if (keyElement === "botanical") return "图案像枝影一样疏一点";
+  if (keyElement === "water-wave") return "图案带一点水纹流线";
+  if (keyElement === "light-trace") return "图案像灯影一样留下痕迹";
+  if (keyElement === "stone-texture") return "图案有一点石面肌理";
+  if (keyElement === "landscape") return "图案更像抽象地貌在铺开";
+  if (keyElement === "floral") return "图案留一点花叶意味";
+  return undefined;
+}
+
+function describeImpression(analysis: EntryAgentResult) {
+  const impressionSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "impression");
+  const topDirection = impressionSlot?.topDirection ?? analysis.provisionalStateHints.impression;
+
+  if (topDirection === "calm") return "整体安静、收着";
+  if (topDirection === "presence" || topDirection === "energetic") return "整体不会太弱，会留一点存在感";
+  if (topDirection === "warm") return "整体更温润一些";
+  if (topDirection === "soft") return "整体更柔和一些";
+  return undefined;
+}
+
+function describeColor(analysis: EntryAgentResult) {
+  const colorSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "color");
+  const topDirection = colorSlot?.topDirection ?? analysis.provisionalStateHints.colorMood;
+
+  if (topDirection === "restrained" || topDirection === "muted") return "颜色不太跳";
+  if (topDirection === "warm") return "颜色带一点暖意";
+  if (topDirection === "earthy") return "颜色更自然温和";
+  if (topDirection === "spring-green" || topDirection === "spring-green-subtle") return "颜色轻轻透一点绿意";
+  if (topDirection === "cool") return "颜色偏冷净";
+  return undefined;
+}
+
+function describePattern(analysis: EntryAgentResult) {
+  const patternSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern");
+  const patternIntent = patternSlot?.patternIntent;
+  const keyElementDescription = describePatternKeyElement(patternIntent?.keyElement);
+  if (keyElementDescription) {
+    return keyElementDescription;
+  }
+
+  if (patternIntent?.renderingMode === "suggestive") {
+    return "图案不太实，更像轻轻带到";
+  }
+
+  if (patternSlot?.topDirection === "abstract") {
+    return "图案不会太实，会更抽象一点";
+  }
+
+  return undefined;
+}
+
+function describeArrangement(analysis: EntryAgentResult) {
+  const arrangementSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "arrangement");
+  const topDirection = arrangementSlot?.topDirection;
+
+  if (topDirection === "open") return "排布更松一点";
+  if (topDirection === "ordered") return "排布会更整齐一点";
+  return undefined;
+}
+
+function describeResolutionCarryover(analysis: EntryAgentResult, cumulativeCanvas?: FuliSemanticCanvas) {
+  const families = Object.values(analysis.questionResolutionState?.families ?? {}).sort((left, right) => right.sourceTurn - left.sourceTurn);
+  const baseParts: string[] = [];
+  const accentParts: string[] = [];
+
+  for (const resolution of families) {
+    if (resolution.chosenBranch === "flow") {
+      accentParts.push("图案带一点水汽走势的轻流线");
+    } else if (resolution.chosenBranch === "fog") {
+      accentParts.push("图案更像雾气一样轻轻铺开");
+    } else if (resolution.chosenBranch === "calm") {
+      baseParts.push("整体偏安静、克制");
+    } else if (resolution.chosenBranch === "presence") {
+      baseParts.push("整体不会太弱，还能被感觉到一点");
+    } else if (resolution.chosenBranch === "open") {
+      accentParts.push("排布更松，像自然散开");
+    } else if (resolution.chosenBranch === "ordered") {
+      accentParts.push("排布会更整齐一些");
+    } else if (resolution.chosenBranch === "muted") {
+      baseParts.push("颜色会更收一点");
+    } else if (resolution.chosenBranch === "warm") {
+      accentParts.push("颜色里会带一点暖意");
+    }
+  }
+
+  if (hasCumulativeTextCue(analysis, cumulativeCanvas, ["自然"]) && !baseParts.some((part) => part.includes("自然"))) {
+    baseParts.unshift("整体自然、不太修饰");
+  }
+
+  if (hasCumulativeTextCue(analysis, cumulativeCanvas, ["烟雨三月", "烟雨"]) && !baseParts.some((part) => part.includes("湿润"))) {
+    baseParts.push("气氛偏湿润");
+  }
+
+  if (hasCumulativeTextCue(analysis, cumulativeCanvas, ["灯火", "夜色", "暮色"]) && !accentParts.some((part) => part.includes("暖"))) {
+    accentParts.push("里面留一点夜里的温度");
+  }
+
+  if (hasCumulativeTextCue(analysis, cumulativeCanvas, ["月白"]) && !baseParts.some((part) => part.includes("轻、偏净"))) {
+    baseParts.push("底子偏轻、偏净");
+  }
+
+  return dedupeByStem([...baseParts, ...accentParts]);
+}
+
+function buildSnapshotCore(input: {
   analysis: EntryAgentResult;
-  previousAnalysis?: EntryAgentResult;
+  cumulativeCanvas?: FuliSemanticCanvas;
 }) {
-  const patternIntent = input.analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern")?.patternIntent;
-  if (patternIntent?.keyElement && patternIntent.renderingMode) {
-    return `这会把图案语言先收向 ${patternIntent.keyElement}，表达方式更偏 ${patternIntent.renderingMode}。`;
+  const parts = dedupeByStem(unique([
+    ...describeResolutionCarryover(input.analysis, input.cumulativeCanvas),
+    describeImpression(input.analysis),
+    describeColor(input.analysis),
+    describePattern(input.analysis),
+    describeArrangement(input.analysis),
+  ].filter((item): item is string => Boolean(item))));
+
+  if (parts.length > 0) {
+    return parts.slice(0, 3).join("，");
   }
 
-  const focus = input.analysis.questionPlan?.selectedTargetField;
-  if (focus) {
-    return `现在真正被你推实的是${mapFieldToFriendlyLabel(focus)}，后面的判断会围着这条线继续收。`;
+  const cue = input.analysis.semanticCanvas?.rawCues[0] ?? input.cumulativeCanvas?.rawCues[0];
+  if (cue) {
+    return `${cue} 这层感觉已经有了，只是还差一个更具体的画面`;
   }
 
-  const previousSlots = input.previousAnalysis?.intakeGoalState?.slots ?? [];
-  const strengthened = input.analysis.intakeGoalState?.slots.find((slot) => {
-    const previous = previousSlots.find((item) => item.slot === slot.slot)?.topScore ?? 0;
-    return slot.topScore - previous >= 0.12;
-  });
-  if (strengthened) {
-    return `${mapFieldToFriendlyLabel(
-      strengthened.slot === "impression"
-        ? "overallImpression"
-        : strengthened.slot === "color"
-          ? "colorMood"
-          : strengthened.slot === "pattern"
-            ? "patternTendency"
-            : strengthened.slot === "arrangement"
-              ? "arrangementTendency"
-              : "spaceContext",
-    )}这一层比刚才明显更稳了。`;
-  }
-
-  return "这次输入把原来有点散的感觉先压成了一个可继续推进的方向。";
+  return "方向已经有了一个轮廓，但还差最后一个关键判断";
 }
 
-function buildSourceAwareOpening(input: {
-  source: "text" | "opening-selection";
+function buildSnapshotSentence(input: {
+  analysis: EntryAgentResult;
+  cumulativeCanvas?: FuliSemanticCanvas;
+}) {
+  return `我现在会先把它看成：${buildSnapshotCore(input)}。`;
+}
+
+function buildChoiceInterpretationSentence(input: {
   userText: string;
   analysis: EntryAgentResult;
+  cumulativeCanvas?: FuliSemanticCanvas;
 }) {
-  if (input.source === "opening-selection") {
-    return `我先按你刚才选的“${input.userText}”来收，而且会把它当成真实方向，不只是记一条偏好。`;
-  }
+  return `好，那我会先把它定在${buildSnapshotCore({
+    analysis: input.analysis,
+    cumulativeCanvas: input.cumulativeCanvas,
+  })}这条线上。`;
+}
 
-  const focus = input.analysis.questionPlan?.selectedTargetField;
-  if (focus === "patternTendency") {
-    return "这句话里真正起作用的，不是字面对象本身，而是它对图案密度、节奏和边界的要求。";
+function buildChoiceEffectSentence(analysis: EntryAgentResult) {
+  const focus = analysis.questionPlan?.selectedTargetField;
+  if (focus === "overallImpression") {
+    return "这意味着整体气质会先稳下来，而不是急着把图案做实。";
   }
   if (focus === "colorMood") {
-    return "我先不把它压成单一颜色词，而是按它带出来的明度、饱和度和气息去判断。";
+    return "这意味着颜色会先定调，而不是先把视觉存在感往前推。";
   }
-  if (focus === "overallImpression") {
-    return "我先抓的是它推动的整体气质，而不是表面上那些形容词。";
+  if (focus === "patternTendency") {
+    return "这意味着图案语言会先被收清，而不是只停在一个抽象氛围里。";
+  }
+  if (focus === "arrangementTendency") {
+    return "这意味着画面节奏会先被定下来，而不是让排布继续模糊着。";
+  }
+  return "这会让后面的判断更集中，不会几条线一起发散。";
+}
+
+function buildQuestionConsequence(analysis: EntryAgentResult) {
+  const familyId = analysis.questionPlan?.selectedQuestion?.questionFamilyId;
+  if (familyId === "colorMood:poetic-fog-vs-flow") {
+    return "这两个方向最后出来，一个更朦胧，一个更有流动方向。";
+  }
+  if (familyId === "overallImpression:contrast-calm-vs-presence") {
+    return "这会直接影响它最后是更安静地融进去，还是更有一点被看见。";
+  }
+  if (familyId === "patternTendency:contrast-complexity-vs-geometry") {
+    return "这会直接影响最后它更像自然铺开的纹样，还是更有明确骨架。";
+  }
+  if (familyId === "arrangementTendency:contrast-open-vs-ordered") {
+    return "这两个方向最后出来，一个更松，一个更有秩序。";
   }
 
-  return "我先抓住这句话里真正起作用的感知特征，再决定下一步该往哪条线收。";
+  const focus = analysis.questionPlan?.selectedTargetField;
+  if (focus === "patternTendency") {
+    return "这会直接影响图案最后是轻轻带到，还是更有骨架。";
+  }
+  if (focus === "colorMood") {
+    return "这会直接影响最后它更偏气息，还是更偏被看见。";
+  }
+  return undefined;
+}
+
+function buildQuestionLead(input: {
+  analysis: EntryAgentResult;
+  answerAlignment?: AnswerAlignment;
+}) {
+  if (input.answerAlignment?.status === "answered" || input.answerAlignment?.status === "partial") {
+    return "接下来我想先确认：";
+  }
+
+  const familyId = input.analysis.questionPlan?.selectedQuestion?.questionFamilyId;
+  if (familyId === "colorMood:poetic-fog-vs-flow") {
+    return "这里真正要分清的是：";
+  }
+
+  return "接下来我想先确认：";
 }
 
 function buildExpertReply(input: {
   source: "text" | "opening-selection";
   userText: string;
   analysis: EntryAgentResult;
-  previousAnalysis?: EntryAgentResult;
-  currentUnderstanding: string;
+  cumulativeCanvas?: FuliSemanticCanvas;
+  answerAlignment?: AnswerAlignment;
   nextQuestion: string;
 }) {
-  return [
-    buildSourceAwareOpening({
-      source: input.source,
-      userText: input.userText,
-      analysis: input.analysis,
-    }),
-    input.currentUnderstanding,
-    buildShiftSummary({
-      analysis: input.analysis,
-      previousAnalysis: input.previousAnalysis,
-    }),
-    `接下来我只想把这一处分叉问清：${input.nextQuestion}`,
-  ].join(" ");
+  const lines =
+    input.source === "opening-selection"
+      ? [
+          buildChoiceInterpretationSentence({
+            userText: input.userText,
+            analysis: input.analysis,
+            cumulativeCanvas: input.cumulativeCanvas,
+          }),
+          buildChoiceEffectSentence(input.analysis),
+          `我现在只想先确认这一件事：${trimQuestionPrompt(input.nextQuestion)}`,
+        ]
+      : [
+          buildSnapshotSentence({
+            analysis: input.analysis,
+            cumulativeCanvas: input.cumulativeCanvas,
+          }),
+          `${buildQuestionLead({
+            analysis: input.analysis,
+            answerAlignment: input.answerAlignment,
+          })}${trimQuestionPrompt(input.nextQuestion)}`,
+          buildQuestionConsequence(input.analysis),
+        ].filter((item): item is string => Boolean(item));
+
+  return lines.join(" ");
 }
 
 
@@ -406,12 +593,7 @@ export async function buildIntentStabilizationSnapshot({
   };
   const cumulativeCanvas = mergeSemanticCanvas(previousSnapshot?.conversationState.cumulativeCanvas, analysis.semanticCanvas);
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
-  const rawSelectedPrompt = readyToGenerate
-    ? "我已经有一个初步方向了，我们先进入第一轮看看。"
-    : analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
-  const selectedPrompt = readyToGenerate
-    ? rawSelectedPrompt
-    : `${renderPersonaQuestionBridge({ analysis, goalState: analysis.intakeGoalState })} ${rawSelectedPrompt}`.trim();
+  const selectedPrompt = analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
   const currentUnderstanding = buildCumulativeUnderstanding({
     analysis,
     cumulativeCanvas,
@@ -422,8 +604,8 @@ export async function buildIntentStabilizationSnapshot({
     source: "text",
     userText: signal.text.trim(),
     analysis,
-    previousAnalysis: previousSnapshot?.analysis,
-    currentUnderstanding,
+    cumulativeCanvas,
+    answerAlignment,
     nextQuestion: selectedPrompt,
   });
   const nextQuestionHistory = analysis.agentState?.questionHistory ?? previousQuestionHistory;
@@ -482,12 +664,7 @@ export function buildIntentStabilizationSnapshotFromAgentState(input: {
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
   const committedText = input.committedReplyText?.trim() ?? "";
   const text = committedText ? joinUserTexts(input.previousText, committedText) : (input.previousText ?? "");
-  const rawSelectedPrompt = readyToGenerate
-    ? "我已经有一个初步方向了，我们先进入第一轮看看。"
-    : buildFollowUpQuestion(analysis);
-  const selectedPrompt = readyToGenerate
-    ? rawSelectedPrompt
-    : `${renderPersonaQuestionBridge({ analysis, goalState: analysis.intakeGoalState })} ${rawSelectedPrompt}`.trim();
+  const selectedPrompt = analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
   const answerAlignment = {
     status: "initial" as const,
     introducedFields: analysis.hitFields,
@@ -503,8 +680,8 @@ export function buildIntentStabilizationSnapshotFromAgentState(input: {
     source: input.source ?? "opening-selection",
     userText: committedText || "这次选择",
     analysis,
-    previousAnalysis: input.previousSnapshot?.analysis,
-    currentUnderstanding,
+    cumulativeCanvas,
+    answerAlignment,
     nextQuestion: selectedPrompt,
   });
 
