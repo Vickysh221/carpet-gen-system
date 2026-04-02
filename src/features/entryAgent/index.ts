@@ -115,6 +115,7 @@ export * from "./openingQuestionFamilyConfig";
 export * from "./openingOptionRegistry";
 export * from "./openingOptionDelta";
 export * from "./types.visualIntent";
+export * from "./explicitMotifExpansion";
 export * from "./visualIntentCompiler";
 export * from "./visualIntentTestBundle";
 export * from "./promptAdapters";

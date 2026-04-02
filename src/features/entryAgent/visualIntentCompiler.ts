@@ -1,4 +1,5 @@
 import { buildIntentSemanticMappingFromAnalysis } from "./agentRuntime";
+import { expandExplicitMotifs } from "./explicitMotifExpansion";
 import { buildGenericImagePrompt } from "./promptAdapters";
 import type {
   AntiBiasState,
@@ -27,6 +28,10 @@ function unique<T>(items: T[]) {
   return [...new Set(items)];
 }
 
+function uniqueStrings(items: Array<string | undefined>) {
+  return unique(items.filter((item): item is string => Boolean(item && item.trim())));
+}
+
 function clamp(value: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, value));
 }
@@ -52,6 +57,19 @@ function cleanDiagnosticText(text: string) {
     .replace(/\s+/g, " ")
     .replace(/\s([，。！？])/g, "$1")
     .trim();
+}
+
+function isInternalDescriptor(text: string | undefined) {
+  if (!text) return true;
+  return /(semantic|canvas|overallimpression|patterntendency|colormood|arrangementtendency|spacecontext)/i.test(text);
+}
+
+function cleanDescriptorList(values: Array<string | undefined>) {
+  return uniqueStrings(
+    values
+      .map((value) => (value ? cleanDiagnosticText(value) : value))
+      .filter((value) => value && !isInternalDescriptor(value)),
+  );
 }
 
 function normalizeQuestionText(text: string, fallback: string) {
@@ -270,7 +288,7 @@ function buildColorState(analysis: EntryAgentResult): ColorState | undefined {
 function buildImpressionState(analysis: EntryAgentResult): ImpressionState | undefined {
   const directions = analysis.semanticMapping?.slotHypotheses.impression?.topDirections ?? [];
   const poeticImpression = analysis.semanticCanvas?.poeticSignal?.aggregatedSlotDelta.impression;
-  const primary = unique(
+  const primary = cleanDescriptorList(
     directions.slice(0, 3).flatMap((item) => {
       if (item.label === "calm") return ["quiet", "restrained"];
       if (item.label === "warm") return ["intimate"];
@@ -279,18 +297,18 @@ function buildImpressionState(analysis: EntryAgentResult): ImpressionState | und
       return [item.label];
     }),
   );
-  const secondary = unique([
+  const secondary = cleanDescriptorList([
     ...(analysis.semanticCanvas?.designTranslations.impressionTone ?? []),
     (poeticImpression?.calm ?? 0) > 0.45 ? "quiet" : undefined,
     (poeticImpression?.softness ?? 0) > 0.45 ? "delicate" : undefined,
     (poeticImpression?.warmth ?? 0) > 0.45 ? "intimate" : undefined,
     (poeticImpression?.restrained ?? 0) > 0.45 ? "restrained" : undefined,
-  ].filter((item): item is string => Boolean(item))).slice(0, 4);
-  const tension = unique([
+  ]).slice(0, 4);
+  const tension = cleanDescriptorList([
     primary.includes("quiet") && secondary.some((item) => item.includes("warm")) ? "calm-with-warmth" : undefined,
     primary.includes("quiet") && secondary.some((item) => item.includes("distance")) ? "calm-with-distance" : undefined,
     primary.includes("quietly luminous") ? "restrained-but-present" : undefined,
-  ].filter((item): item is string => Boolean(item)));
+  ]);
 
   if (primary.length === 0 && secondary.length === 0 && tension.length === 0) {
     return undefined;
@@ -299,24 +317,31 @@ function buildImpressionState(analysis: EntryAgentResult): ImpressionState | und
   return { primary, secondary, tension };
 }
 
-function buildPatternState(analysis: EntryAgentResult): PatternState | undefined {
+function buildPatternState(input: VisualIntentCompilerInput): PatternState | undefined {
+  const analysis = input.analysis;
   const patternSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern");
   const patternIntent = patternSlot?.patternIntent;
   const hypotheses = analysis.semanticMapping?.slotHypotheses.patternIntent;
   const cues = analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? [];
-  const structuralPattern = unique([
+  const motifExpansion = expandExplicitMotifs(input, patternIntent);
+  const explicitMotifs = uniqueStrings([
+    ...motifExpansion.coreExplicitMotifs,
+    ...motifExpansion.temporaryMotifs.flatMap((item) => item.explicitMotifPhrases),
+  ]);
+  const structuralPattern = uniqueStrings([
     patternIntent?.motionFeeling === "flowing" ? "terrain-flow" : undefined,
     patternIntent?.motionFeeling === "wind-like" ? "linear-rhythm" : undefined,
     patternIntent?.keyElement === "stone-texture" ? "stone-texture" : undefined,
-    patternIntent?.keyElement === "botanical" ? "linear rhythm" : undefined,
+    ...motifExpansion.coreStructuralPatterns,
+    ...motifExpansion.temporaryMotifs.flatMap((item) => item.structuralPatternCandidates),
     patternIntent?.keyElement === "water-wave" ? "water-trace" : undefined,
     patternIntent?.keyElement === "light-trace" ? "light-trace" : undefined,
-  ].filter((item): item is string => Boolean(item)));
-  const atmosphericPattern = unique([
+  ]);
+  const atmosphericPattern = uniqueStrings([
     patternIntent?.keyElement === "cloud-mist" || cues.some((cue) => cue.includes("烟雨")) ? "cloud-mist" : undefined,
     cues.some((cue) => cue.includes("烟雨") || cue.includes("雾")) ? "diffusion" : undefined,
     cues.some((cue) => cue.includes("月白")) ? "soft layering" : undefined,
-  ].filter((item): item is string => Boolean(item)));
+  ]);
 
   const state: PatternState = {
     abstraction: mapPatternAbstraction(patternIntent),
@@ -328,9 +353,12 @@ function buildPatternState(analysis: EntryAgentResult): PatternState | undefined
       atmosphericPattern.includes("cloud-mist") || atmosphericPattern.includes("diffusion") ? "blurred" : patternIntent?.renderingMode === "suggestive" ? "soft" : "mixed",
     motifBehavior:
       patternIntent?.renderingMode === "literal" ? "visible" : patternIntent?.renderingMode === "suggestive" ? "suggestive" : "implicit",
+    coreExplicitMotifs: motifExpansion.coreExplicitMotifs,
+    explicitMotifs,
     structuralPattern,
     atmosphericPattern,
-    keyElements: unique([patternIntent?.keyElement].filter((item): item is string => Boolean(item))),
+    keyElements: uniqueStrings([patternIntent?.keyElement, ...motifExpansion.coreSubjects]),
+    temporaryMotifs: motifExpansion.temporaryMotifs,
   };
 
   return state;
@@ -415,10 +443,13 @@ function buildConstraintState(input: VisualIntentCompilerInput): ConstraintState
     ...(input.freeTextInputs ?? []),
     input.analysis.agentState?.cumulativeText ?? "",
   ].join(" ");
+  const patternIntent = input.analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern")?.patternIntent;
+  const motifExpansion = expandExplicitMotifs(input, patternIntent);
   const avoidMotifs = unique([
     /不要太花|别太花/.test(textCorpus) ? "dense decorative floral ornament" : undefined,
     /不要literal landscape|不要山水写实|不要景观感/.test(textCorpus) ? "literal landscape imagery" : undefined,
     /不要floral ornament/.test(textCorpus) ? "floral ornament" : undefined,
+    ...motifExpansion.temporaryMotifs.flatMap((item) => item.provisionalNegativeHints),
   ].filter((item): item is string => Boolean(item)));
   const avoidStyles = unique([
     /不要酒店感/.test(textCorpus) ? "hotel-luxury styling" : undefined,
@@ -450,10 +481,13 @@ function buildConstraintState(input: VisualIntentCompilerInput): ConstraintState
 
 function buildAntiBiasState(input: VisualIntentCompilerInput, constraints: ConstraintState): AntiBiasState {
   const hits = input.analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? [];
+  const patternIntent = input.analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern")?.patternIntent;
+  const motifExpansion = expandExplicitMotifs(input, patternIntent);
   return {
     antiLiteralization: unique([
       hits.some((item) => item.includes("烟雨") || item.includes("竹影") || item.includes("月白")) ? "translate poetic cues into sensory pattern behavior" : undefined,
       "avoid scenic illustration",
+      ...motifExpansion.antiLiteralRules,
     ].filter((item): item is string => Boolean(item))),
     antiDecorative: unique([
       constraints.avoidMotifs.length > 0 ? "avoid dense decorative ornament" : undefined,
@@ -531,7 +565,7 @@ export function buildCanonicalIntentState(input: VisualIntentCompilerInput): Can
   const atmosphere = buildAtmosphereState(analysis);
   const color = buildColorState(analysis);
   const impression = buildImpressionState(analysis);
-  const pattern = buildPatternState(analysis);
+  const pattern = buildPatternState(input);
   const presence = buildPresenceState(analysis);
   const arrangement = buildArrangementState(analysis);
   const materiality = buildMaterialityState(analysis);
@@ -630,12 +664,15 @@ function buildSemanticSpec(state: CanonicalIntentState): GenerationSemanticSpec 
       abstraction: state.pattern?.value.abstraction,
       density: state.pattern?.value.density,
       scale: state.pattern?.value.scale,
+      coreExplicitMotifs: state.pattern?.value.coreExplicitMotifs,
+      explicitMotifs: state.pattern?.value.explicitMotifs,
       structuralPattern: state.pattern?.value.structuralPattern,
       atmosphericPattern: state.pattern?.value.atmosphericPattern,
       motion: state.pattern?.value.motion,
       edgeDefinition: state.pattern?.value.edgeDefinition,
       motifBehavior: state.pattern?.value.motifBehavior,
       keyElements: state.pattern?.value.keyElements,
+      temporaryMotifs: state.pattern?.value.temporaryMotifs,
     },
     presence: {
       blending: state.presence?.value.blending,

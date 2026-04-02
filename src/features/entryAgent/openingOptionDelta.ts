@@ -151,9 +151,10 @@ function deriveOpeningDirectionLabel(slot: OpeningPatchSlot, delta: Record<strin
 
 function derivePatternKeyElement(options: OpeningOptionDefinition[]): string | undefined {
   const joined = options.map((option) => `${option.id} ${option.label}`).join(" ");
+  if (joined.includes("花叶") || joined.includes("花卉") || joined.includes("floral")) return "floral";
   if (joined.includes("botanical") || joined.includes("植物") || joined.includes("叶")) return "botanical";
   if (joined.includes("landscape") || joined.includes("山水") || joined.includes("地貌")) return "landscape";
-  if (joined.includes("floral") || joined.includes("花")) return "floral";
+  if (joined.includes("花")) return "floral";
   if (joined.includes("geometric") || joined.includes("几何")) return "geometric-motif";
   if (joined.includes("wave") || joined.includes("云气") || joined.includes("水意")) return "water-wave";
   if (joined.includes("texture") || joined.includes("肌理")) return "stone-texture";

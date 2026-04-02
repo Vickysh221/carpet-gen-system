@@ -114,6 +114,8 @@ export function buildVisualIntentTestBundle(pkg: CompiledVisualIntentPackage): V
     tuningSuggestions: buildTuningSuggestions(pkg),
     confidenceState: pkg.confidenceState,
     unresolvedQuestions: pkg.unresolvedQuestions,
+    coreMotifs: pkg.semanticSpec.pattern?.coreExplicitMotifs,
+    temporaryMotifs: pkg.semanticSpec.pattern?.temporaryMotifs,
     trace: pkg.trace,
   };
 }

@@ -303,6 +303,8 @@ function VisualIntentBundleCard({ bundle, previousBundle }: { bundle: VisualInte
       : undefined,
     bundle.semanticSpec.pattern
       ? `pattern · ${[
+          ...(bundle.semanticSpec.pattern.coreExplicitMotifs ?? []),
+          ...(bundle.semanticSpec.pattern.explicitMotifs ?? []),
           ...(bundle.semanticSpec.pattern.structuralPattern ?? []),
           ...(bundle.semanticSpec.pattern.atmosphericPattern ?? []),
           bundle.semanticSpec.pattern.motion,
@@ -363,6 +365,35 @@ function VisualIntentBundleCard({ bundle, previousBundle }: { bundle: VisualInte
             {semanticSpecEntries.map((entry) => (
               <div key={entry}>{entry}</div>
             ))}
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Core motifs</div>
+            <div className="mt-2 rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3 text-xs leading-5 text-stone-700">
+              {(bundle.coreMotifs ?? []).length > 0 ? (bundle.coreMotifs ?? []).join(" · ") : "none"}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Temporary motifs</div>
+            <div className="mt-2 space-y-2">
+              {(bundle.temporaryMotifs ?? []).length === 0 ? (
+                <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3 text-xs text-stone-600">No temporary motif proposal.</div>
+              ) : (
+                (bundle.temporaryMotifs ?? []).map((motif) => (
+                  <div key={`${motif.normalizedSubject}-${motif.rawText}`} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3 text-xs leading-5 text-stone-700">
+                    <div className="font-semibold text-stone-800">
+                      {motif.rawText} · {motif.normalizedSubject} · {Math.round(motif.confidence * 100)}%
+                    </div>
+                    <div className="mt-1">motifs · {motif.explicitMotifPhrases.join(" · ")}</div>
+                    <div className="mt-1">structure · {motif.structuralPatternCandidates.join(" · ")}</div>
+                    <div className="mt-1 text-stone-500">anti-literal · {motif.antiLiteralWarnings.join(" · ")}</div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
 

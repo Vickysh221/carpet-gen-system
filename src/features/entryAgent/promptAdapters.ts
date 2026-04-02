@@ -147,6 +147,7 @@ function buildMidjourneyPatternBlock(spec: GenerationSemanticSpec) {
 
   return compact([
     spec.pattern.abstraction ? `${spec.pattern.abstraction} pattern language` : undefined,
+    joinList(sanitizeMidjourneyList(spec.pattern.explicitMotifs)),
     joinList(sanitizeMidjourneyList(spec.pattern.structuralPattern)),
     joinList(sanitizeMidjourneyList(spec.pattern.atmosphericPattern)),
     sanitizeMidjourneyToken(mapPatternMotion(spec.pattern.motion)),

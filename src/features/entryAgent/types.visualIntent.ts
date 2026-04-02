@@ -56,9 +56,26 @@ export interface PatternState {
   motion?: "still" | "gentle-flow" | "directional-flow" | "pulsed";
   edgeDefinition?: "blurred" | "soft" | "mixed" | "clear";
   motifBehavior?: "implicit" | "suggestive" | "visible";
+  coreExplicitMotifs?: string[];
+  explicitMotifs?: string[];
   structuralPattern?: string[];
   atmosphericPattern?: string[];
   keyElements?: string[];
+  temporaryMotifs?: TemporaryMotifTemplate[];
+}
+
+export interface TemporaryMotifTemplate {
+  rawText: string;
+  normalizedSubject: string;
+  confidence: number;
+  visualTraits: string[];
+  structuralPatternCandidates: string[];
+  explicitMotifPhrases: string[];
+  antiLiteralWarnings: string[];
+  recommendedRenderingMode: "suggestive" | "silhouette" | "structural";
+  recommendedAbstraction: "abstract" | "semi-abstract";
+  provisionalNegativeHints: string[];
+  reviewStatus: "temporary" | "accepted" | "rejected";
 }
 
 export interface PresenceState {
@@ -140,12 +157,15 @@ export interface GenerationSemanticSpec {
     abstraction?: string;
     density?: string;
     scale?: string;
+    coreExplicitMotifs?: string[];
+    explicitMotifs?: string[];
     structuralPattern?: string[];
     atmosphericPattern?: string[];
     motion?: string;
     edgeDefinition?: string;
     motifBehavior?: string;
     keyElements?: string[];
+    temporaryMotifs?: TemporaryMotifTemplate[];
   };
   presence?: {
     blending?: string;
@@ -228,6 +248,8 @@ export interface VisualIntentTestBundle {
   tuningSuggestions: TuningSuggestions;
   confidenceState: ConfidenceState;
   unresolvedQuestions: string[];
+  coreMotifs?: string[];
+  temporaryMotifs?: TemporaryMotifTemplate[];
   trace?: TraceBundle;
 }
 
