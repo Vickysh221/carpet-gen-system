@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test:intent-regression": "node scripts/run-intent-intake-regression.mjs",
+    "test:visual-intent": "node scripts/run-visual-intent-cases.mjs",
     "preview": "vite preview",
     "assets:index": "python3 tools/build_product_asset_index.py",
     "assets:fetch-51-200": "python3 tools/fetch_fuli_products_51_200.py"

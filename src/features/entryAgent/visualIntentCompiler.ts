@@ -1,0 +1,766 @@
+import { buildIntentSemanticMappingFromAnalysis } from "./agentRuntime";
+import { buildGenericImagePrompt } from "./promptAdapters";
+import type {
+  AntiBiasState,
+  ArrangementState,
+  AtmosphereState,
+  CanonicalIntentState,
+  ColorState,
+  CompiledVisualIntentPackage,
+  ConfidenceState,
+  ConstraintState,
+  GenerationSemanticSpec,
+  ImpressionState,
+  MaterialityState,
+  PatternState,
+  PresenceState,
+  ReadinessState,
+  SignalSourceType,
+  SlotStatus,
+  SourcedValue,
+  TraceBundle,
+  VisualIntentCompilerInput,
+} from "./types.visualIntent";
+import type { EntryAgentResult, PatternIntentState } from "./types";
+
+function unique<T>(items: T[]) {
+  return [...new Set(items)];
+}
+
+function clamp(value: number, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function average(values: number[]) {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function inferSlotStatus(score: number, phase?: string): SlotStatus {
+  if (phase === "lock-candidate" || score >= 0.76) return "committed";
+  if (phase === "base-captured" || score >= 0.56) return "stable";
+  if (score > 0) return "tentative";
+  return "missing";
+}
+
+function cleanDiagnosticText(text: string) {
+  return text
+    .replace(/arrangementTendency|patternTendency|colorMood|overallImpression|spaceContext/g, "")
+    .replace(/field|anchor|slot/gi, "")
+    .replace(/当前缺少关键\s*位\s*，需要补齐核心风格信息。?/g, "这一层还没有真正收稳。")
+    .replace(/还没有稳定\s*。?/g, "还没有真正收稳。")
+    .replace(/\s+/g, " ")
+    .replace(/\s([，。！？])/g, "$1")
+    .trim();
+}
+
+function normalizeQuestionText(text: string, fallback: string) {
+  const cleaned = cleanDiagnosticText(text)
+    .replace(/^还没有真正收稳。?$/g, "")
+    .trim();
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+function buildVisualIntentFollowup(gap: EntryAgentResult["semanticGaps"][number], analysis: EntryAgentResult) {
+  if (gap.targetField === "arrangementTendency") {
+    const motion = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern")?.patternIntent?.motionFeeling;
+    return motion === "flowing"
+      ? "这种流动你更希望它松一点自然散开，还是更有方向感一点？"
+      : "排布上你更想要松一点、有呼吸感，还是更整齐一点？";
+  }
+
+  if (gap.targetField === "colorMood") {
+    const hits = analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? [];
+    if (hits.some((item) => item.includes("月白")) && hits.some((item) => item.includes("灯火"))) {
+      return "这点暖光你更希望它融进去，还是能被轻轻看见一点？";
+    }
+    if (hits.some((item) => item.includes("烟雨"))) {
+      return "你更想把这层颜色做得更雾一点，还是更清透一点？";
+    }
+    return "颜色上你更想让它更收一点，还是稍微被看见一点？";
+  }
+
+  if (gap.targetField === "patternTendency") {
+    const keyElement = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern")?.patternIntent?.keyElement;
+    if (keyElement === "botanical") {
+      return "图案上你更想要疏一点、轻一点，还是让节奏更明确一点？";
+    }
+    if (keyElement === "cloud-mist") {
+      return "图案上你更想要雾气一样轻轻铺开，还是保留一点更清楚的走势？";
+    }
+    return "图案上你更想让它更轻一点，还是更有骨架一点？";
+  }
+
+  if (gap.targetField === "overallImpression") {
+    return "整体气质上你更想让它更安静克制，还是留一点被看见的存在感？";
+  }
+
+  return "这一层还需要再确认一下。";
+}
+
+function buildSources(input: {
+  hasExplicitText?: boolean;
+  hasOptions?: boolean;
+  hasPoetic?: boolean;
+  hasInference?: boolean;
+  hasPlanner?: boolean;
+}): SignalSourceType[] {
+  return unique([
+    input.hasExplicitText ? "explicit_user_text" : undefined,
+    input.hasOptions ? "option_click" : undefined,
+    input.hasPoetic ? "poetic_mapping" : undefined,
+    input.hasInference ? "semantic_inference" : undefined,
+    input.hasPlanner ? "planner_bridge" : undefined,
+  ].filter((item): item is SignalSourceType => Boolean(item)));
+}
+
+function createSourcedValue<T>(input: {
+  value: T | undefined;
+  confidence: number;
+  status: SlotStatus;
+  sources: SignalSourceType[];
+  traces: string[];
+}): SourcedValue<T> | undefined {
+  if (!input.value) {
+    return undefined;
+  }
+
+  return {
+    value: input.value,
+    confidence: Number(clamp(input.confidence).toFixed(2)),
+    status: input.status,
+    sources: unique(input.sources),
+    traces: unique(input.traces).slice(0, 8),
+  };
+}
+
+function getSlotScore(analysis: EntryAgentResult, slot: "impression" | "color" | "pattern" | "arrangement" | "space") {
+  return analysis.intakeGoalState?.slots.find((item) => item.slot === slot)?.topScore ?? 0;
+}
+
+function getSlotPhase(analysis: EntryAgentResult, slot: "impression" | "color" | "pattern" | "arrangement" | "space") {
+  return analysis.intakeGoalState?.slots.find((item) => item.slot === slot)?.phase;
+}
+
+function mapPatternAbstraction(patternIntent: PatternIntentState | undefined): PatternState["abstraction"] {
+  if (patternIntent?.abstractionPreference === "concrete") return "figurative";
+  if (patternIntent?.abstractionPreference === "semi-abstract") return "semi-abstract";
+  return "abstract";
+}
+
+function mapPatternMotion(patternIntent: PatternIntentState | undefined): PatternState["motion"] {
+  if (patternIntent?.motionFeeling === "flowing") return "directional-flow";
+  if (patternIntent?.motionFeeling === "wind-like" || patternIntent?.motionFeeling === "layered") return "gentle-flow";
+  if (patternIntent?.motionFeeling === "dispersed") return "pulsed";
+  return "still";
+}
+
+function buildAtmosphereState(analysis: EntryAgentResult): AtmosphereState | undefined {
+  const poetic = analysis.semanticCanvas?.poeticSignal;
+  const poeticColor = poetic?.aggregatedSlotDelta.color;
+  const poeticImpression = poetic?.aggregatedSlotDelta.impression;
+  const color = analysis.semanticMapping?.slotHypotheses.color;
+  const impression = analysis.semanticMapping?.slotHypotheses.impression;
+  const state: AtmosphereState = {};
+
+  if (analysis.intakeGoalState?.slots.find((slot) => slot.slot === "impression")?.topDirection === "calm") {
+    state.quietness = 0.82;
+    state.restraint = 0.74;
+  }
+  if (impression?.topDirections.some((item) => item.label.includes("warm"))) {
+    state.warmth = 0.68;
+  }
+  if (poetic?.presence) {
+    state.haze = Number(clamp(poetic.presence.blending).toFixed(2));
+    state.softness = Number(clamp(1 - poetic.presence.focalness * 0.4).toFixed(2));
+  }
+  if ((poeticColor?.haze ?? 0) > 0) {
+    state.humidity = poeticColor?.haze;
+    state.haze = Math.max(state.haze ?? 0, poeticColor?.haze ?? 0);
+  }
+  if ((poeticImpression?.calm ?? 0) > 0.45) {
+    state.quietness = Math.max(state.quietness ?? 0, poeticImpression?.calm ?? 0);
+    state.restraint = Math.max(state.restraint ?? 0, poeticImpression?.restrained ?? poeticImpression?.calm ?? 0);
+  }
+  if (color?.warmth?.top === "cool") {
+    state.distance = 0.62;
+    state.clarity = 0.48;
+  }
+
+  return Object.keys(state).length > 0 ? state : undefined;
+}
+
+function buildColorState(analysis: EntryAgentResult): ColorState | undefined {
+  const poetic = analysis.semanticCanvas?.poeticSignal;
+  const poeticColor = poetic?.aggregatedSlotDelta.color;
+  const presence = poetic?.presence;
+  const mapping = analysis.semanticMapping ?? buildIntentSemanticMappingFromAnalysis(analysis);
+  const state: ColorState = {
+    temperature:
+      poeticColor?.temperature && poeticColor.temperature < -0.2
+        ? "cool"
+        : poeticColor?.temperature && poeticColor.temperature > 0.2
+          ? "warm"
+          : mapping.slotHypotheses.color?.warmth?.top === "cool"
+            ? "cool"
+            : mapping.slotHypotheses.color?.warmth?.top === "warm"
+              ? "warm"
+              : "cool-neutral",
+    saturation:
+      poeticColor?.saturation && poeticColor.saturation <= -0.55
+        ? "very-low"
+        : poeticColor?.saturation && poeticColor.saturation <= -0.2
+          ? "low"
+        : "medium-low",
+    brightness:
+      poeticColor?.brightness && poeticColor.brightness >= 0.35
+        ? "light"
+        : poeticColor?.brightness && poeticColor.brightness <= -0.2
+          ? "mid-dark"
+          : "medium-light",
+    contrast: presence?.visualWeight === "strong" ? "moderate" : "soft",
+    haze:
+      (poeticColor?.haze ?? 0) >= 0.72 ? "high" : (poeticColor?.haze ?? 0) >= 0.45 ? "medium" : (poeticColor?.haze ?? 0) > 0 ? "low" : "none",
+    paletteBias: unique([
+      ...(analysis.semanticCanvas?.designTranslations.colorIdentity ?? []),
+    ]).slice(0, 4),
+  };
+
+  const cues = analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? [];
+  if (cues.some((cue) => cue.includes("月白"))) {
+    state.baseAccentRelation = { base: "pale cool-light base", relation: "base-only" };
+  }
+  if (cues.some((cue) => cue.includes("灯火"))) {
+    state.baseAccentRelation = {
+      base: state.baseAccentRelation?.base ?? "restrained cool-neutral base",
+      accent: "soft warm light accent",
+      relation: state.baseAccentRelation?.base ? "base-plus-accent" : "dual-tone",
+    };
+  }
+  if (cues.some((cue) => cue.includes("暮色"))) {
+    state.baseAccentRelation = {
+      base: "dusk-toned restrained base",
+      accent: state.baseAccentRelation?.accent,
+      relation: state.baseAccentRelation?.accent ? "base-plus-accent" : "base-only",
+    };
+  }
+  if (cues.some((cue) => cue.includes("月白")) && cues.some((cue) => cue.includes("灯火"))) {
+    state.temperature = "cool-neutral";
+    state.brightness = "medium-light";
+    state.baseAccentRelation = {
+      base: "pale cool-light base",
+      accent: "soft warm lamp-glow accent",
+      relation: "base-plus-accent",
+    };
+  }
+  if (cues.some((cue) => cue.includes("暮色")) && cues.some((cue) => cue.includes("灯火"))) {
+    state.temperature = "warm-neutral";
+    state.brightness = "mid-dark";
+    state.haze = "medium";
+    state.baseAccentRelation = {
+      base: "dusk-toned muted base",
+      accent: "embedded warm light accent",
+      relation: "base-plus-accent",
+    };
+  }
+
+  return state;
+}
+
+function buildImpressionState(analysis: EntryAgentResult): ImpressionState | undefined {
+  const directions = analysis.semanticMapping?.slotHypotheses.impression?.topDirections ?? [];
+  const poeticImpression = analysis.semanticCanvas?.poeticSignal?.aggregatedSlotDelta.impression;
+  const primary = unique(
+    directions.slice(0, 3).flatMap((item) => {
+      if (item.label === "calm") return ["quiet", "restrained"];
+      if (item.label === "warm") return ["intimate"];
+      if (item.label === "soft") return ["delicate"];
+      if (item.label === "energetic" || item.label === "presence") return ["quietly luminous"];
+      return [item.label];
+    }),
+  );
+  const secondary = unique([
+    ...(analysis.semanticCanvas?.designTranslations.impressionTone ?? []),
+    (poeticImpression?.calm ?? 0) > 0.45 ? "quiet" : undefined,
+    (poeticImpression?.softness ?? 0) > 0.45 ? "delicate" : undefined,
+    (poeticImpression?.warmth ?? 0) > 0.45 ? "intimate" : undefined,
+    (poeticImpression?.restrained ?? 0) > 0.45 ? "restrained" : undefined,
+  ].filter((item): item is string => Boolean(item))).slice(0, 4);
+  const tension = unique([
+    primary.includes("quiet") && secondary.some((item) => item.includes("warm")) ? "calm-with-warmth" : undefined,
+    primary.includes("quiet") && secondary.some((item) => item.includes("distance")) ? "calm-with-distance" : undefined,
+    primary.includes("quietly luminous") ? "restrained-but-present" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+
+  if (primary.length === 0 && secondary.length === 0 && tension.length === 0) {
+    return undefined;
+  }
+
+  return { primary, secondary, tension };
+}
+
+function buildPatternState(analysis: EntryAgentResult): PatternState | undefined {
+  const patternSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern");
+  const patternIntent = patternSlot?.patternIntent;
+  const hypotheses = analysis.semanticMapping?.slotHypotheses.patternIntent;
+  const cues = analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? [];
+  const structuralPattern = unique([
+    patternIntent?.motionFeeling === "flowing" ? "terrain-flow" : undefined,
+    patternIntent?.motionFeeling === "wind-like" ? "linear-rhythm" : undefined,
+    patternIntent?.keyElement === "stone-texture" ? "stone-texture" : undefined,
+    patternIntent?.keyElement === "botanical" ? "linear rhythm" : undefined,
+    patternIntent?.keyElement === "water-wave" ? "water-trace" : undefined,
+    patternIntent?.keyElement === "light-trace" ? "light-trace" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+  const atmosphericPattern = unique([
+    patternIntent?.keyElement === "cloud-mist" || cues.some((cue) => cue.includes("烟雨")) ? "cloud-mist" : undefined,
+    cues.some((cue) => cue.includes("烟雨") || cue.includes("雾")) ? "diffusion" : undefined,
+    cues.some((cue) => cue.includes("月白")) ? "soft layering" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+
+  const state: PatternState = {
+    abstraction: mapPatternAbstraction(patternIntent),
+    density:
+      hypotheses?.complexity?.top === "low" ? "low" : patternSlot && patternSlot.topScore >= 0.7 ? "medium-low" : "low",
+    scale: "medium",
+    motion: mapPatternMotion(patternIntent),
+    edgeDefinition:
+      atmosphericPattern.includes("cloud-mist") || atmosphericPattern.includes("diffusion") ? "blurred" : patternIntent?.renderingMode === "suggestive" ? "soft" : "mixed",
+    motifBehavior:
+      patternIntent?.renderingMode === "literal" ? "visible" : patternIntent?.renderingMode === "suggestive" ? "suggestive" : "implicit",
+    structuralPattern,
+    atmosphericPattern,
+    keyElements: unique([patternIntent?.keyElement].filter((item): item is string => Boolean(item))),
+  };
+
+  return state;
+}
+
+function buildPresenceState(analysis: EntryAgentResult): PresenceState | undefined {
+  const presence = analysis.semanticMapping?.slotHypotheses.presence;
+  if (!presence) {
+    return undefined;
+  }
+
+  const blending = presence.blendingMode?.top;
+  const visualWeight = presence.visualWeight?.top;
+  const focalness: PresenceState["focalness"] =
+    blending === "focal" ? "high" : blending === "softly-noticeable" ? "medium" : "low";
+  const behavior: PresenceState["behavior"] =
+    blending === "focal" ? "visible-anchor" : blending === "softly-noticeable" ? "local-lift" : "embedded";
+  const cues = analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? [];
+
+  if (cues.some((cue) => cue.includes("月白")) && cues.some((cue) => cue.includes("灯火"))) {
+    return {
+      blending: "softly-noticeable",
+      focalness: "medium",
+      visualWeight: "light",
+      behavior: "embedded",
+    };
+  }
+
+  if (cues.some((cue) => cue.includes("暮色")) && cues.some((cue) => cue.includes("灯火"))) {
+    return {
+      blending: "softly-noticeable",
+      focalness: "medium",
+      visualWeight: "medium",
+      behavior: "local-lift",
+    };
+  }
+
+  return {
+    blending,
+    focalness,
+    visualWeight,
+    behavior,
+  };
+}
+
+function buildArrangementState(analysis: EntryAgentResult): ArrangementState | undefined {
+  const arrangement = analysis.semanticMapping?.slotHypotheses.arrangement;
+  const patternIntent = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern")?.patternIntent;
+  const state: ArrangementState = {
+    spread:
+      arrangement?.density?.top === "open" ? "airy" : arrangement?.density?.top === "dense" ? "compact" : "balanced",
+    directionalFlow:
+      patternIntent?.motionFeeling === "flowing" ? "clear" : patternIntent?.motionFeeling === "wind-like" ? "gentle" : "none",
+    rhythm:
+      patternIntent?.motionFeeling === "wind-like" ? "linear" : patternIntent?.motionFeeling === "flowing" ? "soft" : "soft",
+    orderliness:
+      arrangement?.order?.top === "ordered" ? "ordered" : arrangement?.order?.top === "free" ? "loose" : "balanced",
+  };
+  return state;
+}
+
+function buildMaterialityState(analysis: EntryAgentResult): MaterialityState | undefined {
+  const cues = analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? [];
+  const surfaceFeel = unique([
+    cues.some((cue) => cue.includes("石")) ? "dry mineral calm" : undefined,
+    cues.some((cue) => cue.includes("灯火")) ? "soft matte warmth" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+  const textureBias = unique([
+    cues.some((cue) => cue.includes("竹影")) ? "fine linear texture" : undefined,
+    cues.some((cue) => cue.includes("烟雨")) ? "mist-softened transitions" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+
+  if (surfaceFeel.length === 0 && textureBias.length === 0) {
+    return undefined;
+  }
+
+  return { surfaceFeel, textureBias };
+}
+
+function buildConstraintState(input: VisualIntentCompilerInput): ConstraintState {
+  const textCorpus = [
+    ...(input.freeTextInputs ?? []),
+    input.analysis.agentState?.cumulativeText ?? "",
+  ].join(" ");
+  const avoidMotifs = unique([
+    /不要太花|别太花/.test(textCorpus) ? "dense decorative floral ornament" : undefined,
+    /不要literal landscape|不要山水写实|不要景观感/.test(textCorpus) ? "literal landscape imagery" : undefined,
+    /不要floral ornament/.test(textCorpus) ? "floral ornament" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+  const avoidStyles = unique([
+    /不要酒店感/.test(textCorpus) ? "hotel-luxury styling" : undefined,
+    /不要rustic/.test(textCorpus) ? "rustic styling" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+  const avoidPalette = unique([
+    /不要太亮/.test(textCorpus) ? "over-bright highlight accent" : undefined,
+    /不要bright gold/.test(textCorpus) ? "bright gold" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+  const avoidComposition = unique([
+    "room scene",
+    "product mockup",
+    "perspective composition",
+  ]);
+  const keepQualities = unique([
+    /自然/.test(textCorpus) ? "natural restraint" : undefined,
+    /烟雨|雾感/.test(textCorpus) ? "mist-softened transitions" : undefined,
+    /水汽流动感/.test(textCorpus) ? "directional soft flow" : undefined,
+  ].filter((item): item is string => Boolean(item)));
+
+  return {
+    avoidMotifs,
+    avoidStyles,
+    avoidPalette,
+    avoidComposition,
+    keepQualities,
+  };
+}
+
+function buildAntiBiasState(input: VisualIntentCompilerInput, constraints: ConstraintState): AntiBiasState {
+  const hits = input.analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? [];
+  return {
+    antiLiteralization: unique([
+      hits.some((item) => item.includes("烟雨") || item.includes("竹影") || item.includes("月白")) ? "translate poetic cues into sensory pattern behavior" : undefined,
+      "avoid scenic illustration",
+    ].filter((item): item is string => Boolean(item))),
+    antiDecorative: unique([
+      constraints.avoidMotifs.length > 0 ? "avoid dense decorative ornament" : undefined,
+      "avoid overfilled ornamental rhythm",
+    ].filter((item): item is string => Boolean(item))),
+    antiLuxury: unique([
+      constraints.avoidStyles.includes("hotel-luxury styling") ? "avoid glossy luxury finish" : undefined,
+      "avoid metallic opulence",
+    ].filter((item): item is string => Boolean(item))),
+    antiScene: ["no room scene", "no product mockup", "no perspective staging"],
+  };
+}
+
+function buildUnresolvedSplits(analysis: EntryAgentResult) {
+  return unique(
+    (analysis.semanticGaps ?? []).slice(0, 6).map((gap) => JSON.stringify({
+      id: gap.id,
+      slot: gap.targetSlot ?? gap.targetField ?? "unknown",
+      question: normalizeQuestionText(
+        gap.questionPromptOverride ?? gap.reason,
+        buildVisualIntentFollowup(gap, analysis),
+      ),
+      reason: cleanDiagnosticText(gap.rankingReason),
+    })),
+  ).map((item) => JSON.parse(item));
+}
+
+function buildReadiness(analysis: EntryAgentResult): ReadinessState {
+  const summary = analysis.semanticMapping?.confidenceSummary ?? buildIntentSemanticMappingFromAnalysis(analysis).confidenceSummary;
+  const score = Number(
+    average([
+      summary.macroSlotCoverage.impression,
+      summary.macroSlotCoverage.color,
+      summary.macroSlotCoverage.patternIntent,
+      summary.macroSlotCoverage.arrangement,
+      summary.macroSlotCoverage.presence,
+    ]).toFixed(2),
+  );
+  return {
+    score,
+    mode: summary.readyForFirstBatch ? "preview" : score >= 0.72 ? "committed" : "exploratory",
+  };
+}
+
+function buildTraceBundle(input: VisualIntentCompilerInput): TraceBundle {
+  const analysis = input.analysis;
+  return {
+    freeTextInputs: input.freeTextInputs ?? (analysis.agentState?.cumulativeText ? analysis.agentState.cumulativeText.split("\n").filter(Boolean) : []),
+    selectedOptions: input.selectedOptions ?? [],
+    turnHistory: input.turnHistory ?? [],
+    poeticHits: unique(analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? []),
+    sourceNotes: unique([
+      ...(analysis.semanticCanvas?.rawCues ?? []),
+      ...(analysis.semanticCanvas?.designTranslations.motifLogic ?? []),
+      ...(analysis.semanticCanvas?.designTranslations.impressionTone ?? []),
+    ].map(cleanDiagnosticText).filter(Boolean)).slice(0, 10),
+    latestResolutionReasons: Object.values(analysis.questionResolutionState?.families ?? {})
+      .sort((left, right) => right.sourceTurn - left.sourceTurn)
+      .map((item) => cleanDiagnosticText(item.reason))
+      .slice(0, 4),
+  };
+}
+
+export function buildCanonicalIntentState(input: VisualIntentCompilerInput): CanonicalIntentState {
+  const analysis = input.analysis;
+  const semanticMapping = analysis.semanticMapping ?? buildIntentSemanticMappingFromAnalysis(analysis);
+  const readiness = buildReadiness({ ...analysis, semanticMapping });
+  const trace = buildTraceBundle(input);
+  const constraints = buildConstraintState(input);
+  const antiBias = buildAntiBiasState(input, constraints);
+  const hasPoetic = (trace.poeticHits.length ?? 0) > 0;
+  const hasOptions = (input.selectedOptions?.length ?? 0) > 0;
+  const hasText = (trace.freeTextInputs.length ?? 0) > 0;
+
+  const atmosphere = buildAtmosphereState(analysis);
+  const color = buildColorState(analysis);
+  const impression = buildImpressionState(analysis);
+  const pattern = buildPatternState(analysis);
+  const presence = buildPresenceState(analysis);
+  const arrangement = buildArrangementState(analysis);
+  const materiality = buildMaterialityState(analysis);
+
+  return {
+    atmosphere: createSourcedValue({
+      value: atmosphere,
+      confidence: Math.max(getSlotScore(analysis, "impression"), semanticMapping.confidenceSummary.macroSlotCoverage.presence),
+      status: inferSlotStatus(getSlotScore(analysis, "impression"), getSlotPhase(analysis, "impression")),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true }),
+      traces: [...trace.poeticHits, ...trace.latestResolutionReasons],
+    }),
+    color: createSourcedValue({
+      value: color,
+      confidence: getSlotScore(analysis, "color"),
+      status: inferSlotStatus(getSlotScore(analysis, "color"), getSlotPhase(analysis, "color")),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true }),
+      traces: [...trace.poeticHits, ...(semanticMapping.slotHypotheses.color?.evidence ?? [])],
+    }),
+    impression: createSourcedValue({
+      value: impression,
+      confidence: getSlotScore(analysis, "impression"),
+      status: inferSlotStatus(getSlotScore(analysis, "impression"), getSlotPhase(analysis, "impression")),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true }),
+      traces: [...trace.latestResolutionReasons, ...(semanticMapping.slotHypotheses.impression?.topDirections.flatMap((item) => item.evidence) ?? [])],
+    }),
+    pattern: createSourcedValue({
+      value: pattern,
+      confidence: getSlotScore(analysis, "pattern"),
+      status: inferSlotStatus(getSlotScore(analysis, "pattern"), getSlotPhase(analysis, "pattern")),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true }),
+      traces: [...trace.poeticHits, ...(semanticMapping.slotHypotheses.patternIntent?.evidence ?? [])],
+    }),
+    presence: createSourcedValue({
+      value: presence,
+      confidence: semanticMapping.confidenceSummary.macroSlotCoverage.presence,
+      status: inferSlotStatus(semanticMapping.confidenceSummary.macroSlotCoverage.presence),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true }),
+      traces: [...trace.poeticHits, ...(semanticMapping.slotHypotheses.presence?.evidence ?? [])],
+    }),
+    arrangement: createSourcedValue({
+      value: arrangement,
+      confidence: getSlotScore(analysis, "arrangement"),
+      status: inferSlotStatus(getSlotScore(analysis, "arrangement"), getSlotPhase(analysis, "arrangement")),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasInference: true, hasPlanner: true }),
+      traces: semanticMapping.slotHypotheses.arrangement?.evidence ?? [],
+    }),
+    materiality: createSourcedValue({
+      value: materiality,
+      confidence: materiality ? 0.44 : 0,
+      status: materiality ? "tentative" : "missing",
+      sources: buildSources({ hasExplicitText: hasText, hasPoetic, hasInference: true }),
+      traces: [...trace.poeticHits],
+    }),
+    constraints: createSourcedValue({
+      value: constraints,
+      confidence: constraints.avoidMotifs.length + constraints.avoidStyles.length + constraints.avoidPalette.length > 0 ? 0.78 : 0.42,
+      status: constraints.avoidMotifs.length + constraints.avoidStyles.length + constraints.avoidPalette.length > 0 ? "stable" : "tentative",
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasInference: true }),
+      traces: trace.freeTextInputs,
+    }),
+    antiBias: createSourcedValue({
+      value: antiBias,
+      confidence: 0.72,
+      status: "stable",
+      sources: buildSources({ hasPoetic, hasInference: true }),
+      traces: [...trace.poeticHits, ...antiBias.antiLiteralization],
+    }),
+    unresolvedSplits: buildUnresolvedSplits(analysis),
+    readiness,
+  };
+}
+
+function buildSemanticSpec(state: CanonicalIntentState): GenerationSemanticSpec {
+  return {
+    baseMood: unique([
+      ...(state.impression?.value.primary ?? []),
+      ...(state.impression?.value.tension ?? []),
+    ]),
+    palette: {
+      temperature: state.color?.value.temperature,
+      saturation: state.color?.value.saturation,
+      brightness: state.color?.value.brightness,
+      contrast: state.color?.value.contrast,
+      haze: state.color?.value.haze,
+      base: state.color?.value.baseAccentRelation?.base ?? null,
+      accent: state.color?.value.baseAccentRelation?.accent ?? null,
+      relation: state.color?.value.baseAccentRelation?.relation,
+    },
+    atmosphere: unique([
+      ...(state.impression?.value.secondary ?? []),
+      ...(state.atmosphere?.value.humidity ? ["humid"] : []),
+      ...(state.atmosphere?.value.haze ? ["mist-softened"] : []),
+    ]),
+    pattern: {
+      abstraction: state.pattern?.value.abstraction,
+      density: state.pattern?.value.density,
+      scale: state.pattern?.value.scale,
+      structuralPattern: state.pattern?.value.structuralPattern,
+      atmosphericPattern: state.pattern?.value.atmosphericPattern,
+      motion: state.pattern?.value.motion,
+      edgeDefinition: state.pattern?.value.edgeDefinition,
+      motifBehavior: state.pattern?.value.motifBehavior,
+      keyElements: state.pattern?.value.keyElements,
+    },
+    presence: {
+      blending: state.presence?.value.blending,
+      focalness: state.presence?.value.focalness,
+      visualWeight: state.presence?.value.visualWeight,
+      behavior: state.presence?.value.behavior,
+    },
+    arrangement: {
+      spread: state.arrangement?.value.spread,
+      directionalFlow: state.arrangement?.value.directionalFlow,
+      rhythm: state.arrangement?.value.rhythm,
+      symmetry: state.arrangement?.value.orderliness === "ordered" ? "soft-symmetry" : "asymmetric",
+      orderliness: state.arrangement?.value.orderliness,
+    },
+    materiality: state.materiality?.value,
+    constraints: state.constraints?.value,
+  };
+}
+
+function buildNegativePrompt(constraints: ConstraintState, antiBias: AntiBiasState) {
+  return unique([
+    ...constraints.avoidMotifs,
+    ...constraints.avoidStyles,
+    ...constraints.avoidPalette,
+    ...constraints.avoidComposition,
+    ...antiBias.antiLiteralization,
+    ...antiBias.antiDecorative,
+    ...antiBias.antiLuxury,
+    ...antiBias.antiScene,
+  ]).join(", ");
+}
+
+function buildSummary(spec: GenerationSemanticSpec) {
+  const baseMood = spec.baseMood?.slice(0, 2).join(", ");
+  const pattern = unique([
+    ...(spec.pattern?.structuralPattern ?? []),
+    ...(spec.pattern?.atmosphericPattern ?? []),
+  ]).slice(0, 2).join(", ");
+  const presence = spec.presence?.visualWeight ? `${spec.presence?.blending} ${spec.presence.visualWeight} presence` : undefined;
+  return [baseMood, pattern, presence].filter(Boolean).join(" | ");
+}
+
+function buildDeveloperBrief(spec: GenerationSemanticSpec, unresolvedQuestions: string[]) {
+  const lines = [
+    `Base mood: ${(spec.baseMood ?? []).join(", ") || "unspecified"}`,
+    `Palette: ${[
+      spec.palette?.temperature,
+      spec.palette?.saturation,
+      spec.palette?.brightness,
+      spec.palette?.base,
+      spec.palette?.accent,
+    ].filter(Boolean).join(", ") || "unspecified"}`,
+    `Pattern: ${[
+      ...(spec.pattern?.structuralPattern ?? []),
+      ...(spec.pattern?.atmosphericPattern ?? []),
+      spec.pattern?.motion,
+      spec.pattern?.edgeDefinition,
+    ].filter(Boolean).join(", ") || "unspecified"}`,
+  ];
+
+  if (unresolvedQuestions.length > 0) {
+    lines.push(`Unresolved: ${unresolvedQuestions.join(" | ")}`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildConfidenceState(state: CanonicalIntentState, analysis: EntryAgentResult): ConfidenceState {
+  const slotCoverage = {
+    atmosphere: state.atmosphere?.confidence ?? 0,
+    color: state.color?.confidence ?? 0,
+    impression: state.impression?.confidence ?? 0,
+    pattern: state.pattern?.confidence ?? 0,
+    presence: state.presence?.confidence ?? 0,
+    arrangement: state.arrangement?.confidence ?? 0,
+    materiality: state.materiality?.confidence ?? 0,
+  };
+  const stableSlots = Object.entries({
+    atmosphere: state.atmosphere?.status,
+    color: state.color?.status,
+    impression: state.impression?.status,
+    pattern: state.pattern?.status,
+    presence: state.presence?.status,
+    arrangement: state.arrangement?.status,
+    materiality: state.materiality?.status,
+  }).filter(([, status]) => status === "stable" || status === "committed").map(([slot]) => slot);
+  const committedSlots = Object.entries({
+    atmosphere: state.atmosphere?.status,
+    color: state.color?.status,
+    impression: state.impression?.status,
+    pattern: state.pattern?.status,
+    presence: state.presence?.status,
+    arrangement: state.arrangement?.status,
+    materiality: state.materiality?.status,
+  }).filter(([, status]) => status === "committed").map(([slot]) => slot);
+
+  return {
+    readiness: state.readiness,
+    slotCoverage,
+    stableSlots,
+    committedSlots: committedSlots.length > 0 ? committedSlots : analysis.semanticMapping?.confidenceSummary.lockCandidateSlots ?? [],
+  };
+}
+
+export function buildVisualIntentCompiler(input: VisualIntentCompilerInput): CompiledVisualIntentPackage {
+  const canonicalState = buildCanonicalIntentState(input);
+  const semanticSpec = buildSemanticSpec(canonicalState);
+  const unresolvedQuestions = canonicalState.unresolvedSplits.map((item) => item.question);
+  const developerBrief = buildDeveloperBrief(semanticSpec, unresolvedQuestions);
+  const summary = buildSummary(semanticSpec);
+  const generationPrompt = buildGenericImagePrompt(semanticSpec);
+  const negativePrompt = buildNegativePrompt(
+    canonicalState.constraints?.value ?? { avoidMotifs: [], avoidStyles: [], avoidPalette: [], avoidComposition: [], keepQualities: [] },
+    canonicalState.antiBias?.value ?? { antiLiteralization: [], antiDecorative: [], antiLuxury: [], antiScene: [] },
+  );
+
+  return {
+    canonicalState,
+    summary,
+    developerBrief,
+    semanticSpec,
+    generationPrompt,
+    negativePrompt,
+    confidenceState: buildConfidenceState(canonicalState, input.analysis),
+    unresolvedQuestions,
+    trace: buildTraceBundle(input),
+  };
+}

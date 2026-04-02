@@ -11,6 +11,9 @@ import { getReferenceAssets, type AssetSourceMode } from "@/core/assets/assetSou
 import { assignDiverseNearestAnnotatedAssets, assignProbingCarriers, findNearestAnnotatedAssets, findExploratoryAnnotatedAssets } from "@/core/assets/matching";
 import type { AnnotatedAssetRecord, FirstOrderSlotValues } from "@/core/assets/types";
 import {
+  buildDerivedEntryAnalysisFromAgentState,
+  buildVisualIntentCompiler,
+  buildVisualIntentTestBundle,
   createIntentIntakeAgentState,
   getOpeningFamiliesForFirstTurns,
   OPENING_OPTION_INDEX,
@@ -20,6 +23,7 @@ import {
   type IntakeMacroSlot,
   type OpeningSelectionSignal,
   type TextIntakeSignal,
+  type VisualIntentTestBundle,
   updateAgentStateFromSignal,
 } from "@/features/entryAgent";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
@@ -257,6 +261,189 @@ function DialogueBubble({
           </div>
         )}
         <div>{text}</div>
+      </div>
+    </div>
+  );
+}
+
+function buildVisualIntentDiff(current: VisualIntentTestBundle, previous: VisualIntentTestBundle | null) {
+  if (!previous) {
+    return ["当前是第一版 visual intent bundle。"];
+  }
+
+  const diff: string[] = [];
+  if (current.semanticSpec.palette?.base !== previous.semanticSpec.palette?.base || current.semanticSpec.palette?.accent !== previous.semanticSpec.palette?.accent) {
+    diff.push(`palette · ${previous.semanticSpec.palette?.base ?? "none"} / ${previous.semanticSpec.palette?.accent ?? "none"} -> ${current.semanticSpec.palette?.base ?? "none"} / ${current.semanticSpec.palette?.accent ?? "none"}`);
+  }
+  if (current.semanticSpec.pattern?.motion !== previous.semanticSpec.pattern?.motion) {
+    diff.push(`pattern motion · ${previous.semanticSpec.pattern?.motion ?? "none"} -> ${current.semanticSpec.pattern?.motion ?? "none"}`);
+  }
+  if (current.semanticSpec.presence?.behavior !== previous.semanticSpec.presence?.behavior || current.semanticSpec.presence?.visualWeight !== previous.semanticSpec.presence?.visualWeight) {
+    diff.push(`presence · ${previous.semanticSpec.presence?.behavior ?? "none"} / ${previous.semanticSpec.presence?.visualWeight ?? "none"} -> ${current.semanticSpec.presence?.behavior ?? "none"} / ${current.semanticSpec.presence?.visualWeight ?? "none"}`);
+  }
+  if (current.unresolvedQuestions.join(" / ") !== previous.unresolvedQuestions.join(" / ")) {
+    diff.push(`next split · ${current.unresolvedQuestions[0] ?? "none"}`);
+  }
+
+  return diff.length > 0 ? diff : ["本轮 semanticSpec 相比上一轮没有明显结构变化。"];
+}
+
+function VisualIntentBundleCard({ bundle, previousBundle }: { bundle: VisualIntentTestBundle; previousBundle: VisualIntentTestBundle | null }) {
+  const [showCanonical, setShowCanonical] = useState(false);
+  const semanticSpecEntries = [
+    bundle.semanticSpec.baseMood?.length ? `base mood · ${bundle.semanticSpec.baseMood.join(", ")}` : undefined,
+    bundle.semanticSpec.palette
+      ? `palette · ${[
+          bundle.semanticSpec.palette.temperature,
+          bundle.semanticSpec.palette.saturation,
+          bundle.semanticSpec.palette.brightness,
+          bundle.semanticSpec.palette.base,
+          bundle.semanticSpec.palette.accent,
+        ].filter(Boolean).join(" · ")}`
+      : undefined,
+    bundle.semanticSpec.pattern
+      ? `pattern · ${[
+          ...(bundle.semanticSpec.pattern.structuralPattern ?? []),
+          ...(bundle.semanticSpec.pattern.atmosphericPattern ?? []),
+          bundle.semanticSpec.pattern.motion,
+          bundle.semanticSpec.pattern.edgeDefinition,
+        ].filter(Boolean).join(" · ")}`
+      : undefined,
+    bundle.semanticSpec.presence
+      ? `presence · ${[
+          bundle.semanticSpec.presence.blending,
+          bundle.semanticSpec.presence.focalness,
+          bundle.semanticSpec.presence.visualWeight,
+          bundle.semanticSpec.presence.behavior,
+        ].filter(Boolean).join(" · ")}`
+      : undefined,
+    bundle.semanticSpec.arrangement
+      ? `arrangement · ${[
+          bundle.semanticSpec.arrangement.spread,
+          bundle.semanticSpec.arrangement.directionalFlow,
+          bundle.semanticSpec.arrangement.orderliness,
+        ].filter(Boolean).join(" · ")}`
+      : undefined,
+  ].filter(Boolean);
+
+  const tuningRows = Object.entries(bundle.tuningSuggestions).filter(([, value]) => Boolean(value && value.length > 0));
+  const diffRows = buildVisualIntentDiff(bundle, previousBundle);
+
+  return (
+    <div className="rounded-[24px] border border-stone-200 bg-white px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Visual intent bundle</div>
+          <div className="mt-2 text-sm font-medium text-stone-800">{bundle.testLabel}</div>
+        </div>
+        <div className="rounded-full bg-stone-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-600">
+          readiness {Math.round(bundle.confidenceState.readiness.score * 100)}%
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3 text-sm leading-6 text-stone-700">
+        {bundle.summary}
+      </div>
+
+      <div className="mt-4 space-y-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Turn diff</div>
+          <div className="mt-2 space-y-2">
+            {diffRows.map((row) => (
+              <div key={row} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-700">
+                {row}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Semantic spec</div>
+          <div className="mt-2 space-y-2 text-sm leading-6 text-stone-700">
+            {semanticSpecEntries.map((entry) => (
+              <div key={entry}>{entry}</div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Prompt outputs</div>
+          <div className="mt-2 space-y-2">
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3 text-xs leading-5 text-stone-700">
+              <div className="mb-1 font-semibold text-stone-800">Midjourney prompt</div>
+              {bundle.prompt}
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3 text-xs leading-5 text-stone-700">
+              <div className="mb-1 font-semibold text-stone-800">Negative prompt</div>
+              {bundle.negativePrompt}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Risks</div>
+            <div className="mt-2 space-y-2">
+              {bundle.risks.length === 0 ? (
+                <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">No obvious current risk.</div>
+              ) : (
+                bundle.risks.map((risk) => (
+                  <div key={`${risk.type}-${risk.description}`} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-700">
+                    <div className="font-semibold text-stone-800">{risk.type} · {risk.severity}</div>
+                    <div className="mt-1">{risk.description}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Tuning suggestions</div>
+            <div className="mt-2 space-y-2">
+              {tuningRows.length === 0 ? (
+                <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">No tuning suggestion yet.</div>
+              ) : (
+                tuningRows.map(([key, values]) => (
+                  <div key={key} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-700">
+                    <div className="font-semibold text-stone-800">{key}</div>
+                    <div className="mt-1">{(values ?? []).join(" · ")}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Unresolved + trace</div>
+          <div className="mt-2 space-y-2">
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-700">
+              <div className="font-semibold text-stone-800">Unresolved questions</div>
+              <div className="mt-1">{bundle.unresolvedQuestions.join(" / ") || "none"}</div>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-700">
+              <div className="font-semibold text-stone-800">Poetic hits + traces</div>
+              <div className="mt-1">{bundle.trace?.poeticHits.join(" / ") || "none"}</div>
+              <div className="mt-1 text-stone-500">{bundle.trace?.sourceNotes.join(" / ") || "none"}</div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowCanonical((prev) => !prev)}
+            className="inline-flex items-center gap-2 rounded-full border border-stone-300 bg-stone-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-700"
+          >
+            {showCanonical ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {showCanonical ? "Hide canonical state" : "Show canonical state"}
+          </button>
+          {showCanonical && (
+            <div className="mt-2 rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3 text-[11px] leading-5 text-stone-700">
+              <pre className="overflow-x-auto whitespace-pre-wrap">{JSON.stringify(bundle.canonicalState, null, 2)}</pre>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -534,6 +721,7 @@ export function SimulatorPage() {
   const [entryAnalysis, setEntryAnalysis] = useState<EntryAgentResult | null>(null);
   const [currentAgentState, setCurrentAgentState] = useState<IntentIntakeAgentState | null>(null);
   const [initializationExplainability, setInitializationExplainability] = useState<InitializationExplainabilityResult | null>(null);
+  const [previousVisualIntentBundle, setPreviousVisualIntentBundle] = useState<VisualIntentTestBundle | null>(null);
   const [isInspectExpanded, setIsInspectExpanded] = useState(false);
   const [selectedRefInspect, setSelectedRefInspect] = useState<SelectedRefInspectState | null>(null);
   const [feedbackMap, setFeedbackMap] = useState<Record<string, "liked" | "disliked">>({});
@@ -597,6 +785,37 @@ export function SimulatorPage() {
     });
   }, [intentSnapshot, initializationExplainability]);
 
+  const visualIntentBundle = useMemo(() => {
+    const baseAnalysis =
+      intentSnapshot?.analysis ??
+      (authoritativeAgentState ? buildDerivedEntryAnalysisFromAgentState(authoritativeAgentState) : null);
+
+    if (!baseAnalysis) {
+      return null;
+    }
+
+    const pkg = buildVisualIntentCompiler({
+      analysis: baseAnalysis,
+      freeTextInputs: intentSnapshot?.text
+        ? intentSnapshot.text.split("\n").map((item) => item.trim()).filter(Boolean)
+        : authoritativeAgentState?.cumulativeText.split("\n").map((item) => item.trim()).filter(Boolean) ?? [],
+      selectedOptions: (intentSnapshot?.conversationState.dialogue ?? [])
+        .filter((turn) => turn.source === "opening-selection")
+        .map((turn, index) => ({
+          questionId: `opening-${index + 1}`,
+          optionId: turn.userText,
+          label: turn.userText,
+        })),
+      turnHistory: (intentSnapshot?.conversationState.dialogue ?? []).map((turn) => ({
+        turnIndex: turn.turnIndex,
+        text: turn.userText,
+        source: turn.source,
+      })),
+    });
+
+    return buildVisualIntentTestBundle(pkg);
+  }, [intentSnapshot, authoritativeAgentState]);
+
   const baseNearestRefs = useMemo(() => findNearestAnnotatedAssets(firstOrderFromState(baseState), referenceAssets, 3), [baseState, referenceAssets]);
   const preferenceRef = useMemo(() => {
     if (!preferenceCenter) return undefined;
@@ -646,6 +865,7 @@ export function SimulatorPage() {
     setEntryAnalysis(null);
     setCurrentAgentState(null);
     setInitializationExplainability(null);
+    setPreviousVisualIntentBundle(null);
     setIsInspectExpanded(false);
     setSelectedRefInspect(null);
     setFeedbackMap({});
@@ -688,6 +908,7 @@ export function SimulatorPage() {
         currentAgentStateOverride: authoritativeAgentState ?? undefined,
       });
 
+      setPreviousVisualIntentBundle(visualIntentBundle);
       setIntentSnapshot(nextSnapshot);
       setEntryAnalysis(nextSnapshot.analysis);
       setCurrentAgentState(nextSnapshot.analysis.agentState ?? null);
@@ -725,6 +946,7 @@ export function SimulatorPage() {
       committedReplyText: selectedOption.label,
       source: "opening-selection",
     });
+    setPreviousVisualIntentBundle(visualIntentBundle);
     setCurrentAgentState(nextAgentState);
     setIntentSnapshot(nextSnapshot);
     setEntryAnalysis(nextSnapshot.analysis);
@@ -1012,6 +1234,7 @@ export function SimulatorPage() {
             </div>
           );
         })()}
+        {visualIntentBundle && <VisualIntentBundleCard bundle={visualIntentBundle} previousBundle={previousVisualIntentBundle} />}
         <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
           <div className="mb-1">
             分析状态：
