@@ -43,6 +43,10 @@ function normalizeText(text: string | undefined) {
   return (text ?? "").toLowerCase().replace(/\s+/g, "").trim();
 }
 
+function unique<T>(items: T[]) {
+  return [...new Set(items)];
+}
+
 function mapMacroSlotToField(slot: IntakeMacroSlot): HighValueField | undefined {
   if (slot === "impression") return "overallImpression";
   if (slot === "color") return "colorMood";
@@ -439,6 +443,7 @@ function determineDominantEntryPoint(analysis: EntryAgentResult): IntentSemantic
   if (analysis.hitFields.includes("patternTendency")) return "pattern-intent";
   if (analysis.hitFields.includes("colorMood")) return "color";
   if (analysis.hitFields.includes("overallImpression")) return "mood";
+  if ((analysis.semanticCanvas?.poeticSignal?.presence?.focalness ?? 0) > 0.5) return "presence";
   return "presence";
 }
 
@@ -540,8 +545,84 @@ export function buildIntentSemanticMappingFromAgentState(agentState: IntentIntak
   };
 }
 
+export function buildDerivedEntryAnalysisFromAgentState(agentState: IntentIntakeAgentState): EntryAgentResult {
+  const semanticMapping = agentState.latestSemanticMapping ?? buildIntentSemanticMappingFromAgentState(agentState);
+  const nextMissingSlot = agentState.goalState?.missingSlots[0];
+  const hitFields = agentState.slots
+    .filter((slot) => slot.topScore > 0)
+    .map((slot) => mapMacroSlotToField(slot.slot))
+    .filter((field): field is HighValueField => Boolean(field));
+  const latestResolution = Object.values(agentState.resolutionState?.families ?? {})
+    .sort((left, right) => right.sourceTurn - left.sourceTurn)[0];
+
+  return {
+    hitFields,
+    evidence: {},
+    confidence: {},
+    provisionalStateHints: {
+      impression: agentState.slots.find((slot) => slot.slot === "impression")?.topDirection ?? "",
+      colorMood: agentState.slots.find((slot) => slot.slot === "color")?.topDirection ?? "",
+      arrangementTendency: agentState.slots.find((slot) => slot.slot === "arrangement")?.topDirection ?? "",
+      roomType: agentState.slots.find((slot) => slot.slot === "space")?.topDirection ?? "",
+    },
+    ambiguities: [],
+    axisHints: {},
+    weakBiasHints: [],
+    statePatch: {},
+    semanticCanvas: undefined,
+    updatedSlotStates: deriveLegacySlotStates(agentState),
+    suggestedQaMode: "slot-completion",
+    suggestedFollowUpTarget: nextMissingSlot ? mapMacroSlotToField(nextMissingSlot) : undefined,
+    suggestedQuestionIntent: undefined,
+    interpretationMerge: {
+      semanticCanvasCandidates: [],
+      directCandidates: [],
+      prototypeMatches: [],
+      semanticUnits: [],
+      candidateReadings: [],
+      mergeGroups: [],
+      keptReadings: [],
+      suppressedReadings: [],
+      finalResolvedReadings: [],
+      fallback: {
+        triggered: false,
+        reasons: [],
+        provider: "rules-only",
+        available: true,
+        degraded: false,
+        candidates: [],
+      },
+    },
+    semanticUnderstanding: {
+      confirmedDirections: agentState.slots
+        .filter((slot) => Boolean(slot.topDirection))
+        .map((slot) => ({
+          label: slot.topDirection as string,
+          sourceReadingIds: slot.supportingSignals,
+          confidence: slot.topScore,
+        })),
+      activeReadings: [],
+      secondaryReadings: [],
+      openQuestions: agentState.goalState?.missingSlots.map((slot) => `${slot} 还需要再确认一点。`) ?? [],
+      conflictSummary: [],
+      narrative: semanticMapping.interpretedIntent.summary || "opening 方向已进入主状态，等待这一轮确认。",
+      isWeakNarrative: false,
+    },
+    semanticGaps: [],
+    questionCandidates: [],
+    questionPlan: undefined,
+    questionResolutionState: agentState.resolutionState,
+    latestResolution,
+    intakeGoalState: agentState.goalState,
+    semanticMapping,
+    agentState,
+    nextAction: agentState.nextAction,
+  };
+}
+
 export function buildIntentSemanticMappingFromAnalysis(analysis: EntryAgentResult): IntentSemanticMapping {
   const rawCueTexts = analysis.semanticCanvas?.rawCues ?? [];
+  const poeticPresence = analysis.semanticCanvas?.poeticSignal?.presence;
   const patternSlot = analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern");
   const impressionCandidates = collectCandidatesForSlot(analysis, "impression");
   const colorCandidates = collectCandidatesForSlot(analysis, "color");
@@ -617,13 +698,24 @@ export function buildIntentSemanticMappingFromAnalysis(analysis: EntryAgentResul
         evidence: spaceCandidates.flatMap((candidate) => candidate.evidence).slice(0, 4),
       },
       presence: {
-        evidence: analysis.semanticGaps
-          .filter((gap) => gap.reason.includes("存在感") || gap.reason.includes("别太抢"))
-          .flatMap((gap) => gap.evidence)
-          .slice(0, 4),
-        openQuestions: analysis.semanticGaps
-          .filter((gap) => gap.reason.includes("存在感") || gap.reason.includes("别太抢"))
-          .map((gap) => gap.reason),
+        blendingMode: poeticPresence
+          ? { top: poeticPresence.blendingMode, score: Math.max(poeticPresence.blending, 1 - poeticPresence.focalness) }
+          : undefined,
+        visualWeight: poeticPresence
+          ? { top: poeticPresence.visualWeight, score: poeticPresence.visualWeightScore }
+          : undefined,
+        evidence: unique([
+          ...(analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? []),
+          ...analysis.semanticGaps
+            .filter((gap) => gap.reason.includes("存在感") || gap.reason.includes("别太抢"))
+            .flatMap((gap) => gap.evidence),
+        ]).slice(0, 4),
+        openQuestions: unique([
+          ...(analysis.semanticCanvas?.poeticSignal?.followupHints ?? []),
+          ...analysis.semanticGaps
+            .filter((gap) => gap.reason.includes("存在感") || gap.reason.includes("别太抢"))
+            .map((gap) => gap.reason),
+        ]).slice(0, 3),
       },
     },
     questionOpportunities: analysis.semanticGaps.map((gap) => ({
@@ -655,7 +747,9 @@ export function buildIntentSemanticMappingFromAnalysis(analysis: EntryAgentResul
         patternIntent: analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern")?.topScore ?? 0,
         arrangement: analysis.intakeGoalState?.slots.find((slot) => slot.slot === "arrangement")?.topScore ?? 0,
         space: analysis.intakeGoalState?.slots.find((slot) => slot.slot === "space")?.topScore ?? 0,
-        presence: analysis.semanticGaps.some((gap) => gap.reason.includes("存在感")) ? 0.3 : 0,
+        presence: poeticPresence
+          ? Number(Math.max(poeticPresence.visualWeightScore, poeticPresence.focalness, poeticPresence.blending).toFixed(2))
+          : analysis.semanticGaps.some((gap) => gap.reason.includes("存在感")) ? 0.3 : 0,
       },
       baseReadySlots: analysis.intakeGoalState?.slots.filter((slot) => slot.isBaseCaptured).map((slot) => slot.slot) ?? [],
       lockCandidateSlots: analysis.intakeGoalState?.slots.filter((slot) => slot.phase === "lock-candidate").map((slot) => slot.slot) ?? [],
@@ -696,10 +790,6 @@ function appendQuestionTraceIfNeeded(input: {
   analysis: EntryAgentResult;
   nextTurnIndex: number;
 }): QuestionTrace[] {
-  if (input.analysis.intakeGoalState?.readyForFirstGeneration) {
-    return input.questionHistory;
-  }
-
   const trace = buildQuestionTraceFromAnalysis(input.analysis, input.nextTurnIndex);
   if (!trace) {
     return input.questionHistory;

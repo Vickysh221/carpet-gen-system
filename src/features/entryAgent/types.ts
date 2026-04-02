@@ -94,6 +94,30 @@ export interface FuliSemanticCanvas {
     likelyQuestionKinds: string[];
     likelyInformationGains: string[];
   };
+  poeticSignal?: {
+    hits: Array<{
+      key: string;
+      matchedText: string;
+      weight: number;
+    }>;
+    aggregatedSlotDelta: {
+      color?: Record<string, number>;
+      impression?: Record<string, number>;
+      patternIntent?: Record<string, number>;
+      presence?: Record<string, number>;
+    };
+    fieldSemanticHints?: Partial<Record<HighValueField, Record<string, string>>>;
+    axisHints?: EntryAgentAxisHints;
+    patternIntent?: PatternIntentState;
+    presence?: {
+      blendingMode: "blended" | "softly-noticeable" | "focal";
+      visualWeight: "light" | "medium" | "strong";
+      blending: number;
+      focalness: number;
+      visualWeightScore: number;
+    };
+    followupHints: string[];
+  };
 }
 
 export interface FieldAmbiguity {

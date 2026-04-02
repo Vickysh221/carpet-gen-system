@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { RefreshCw, Play, Heart, X, Trophy, ChevronDown, ChevronUp } from "lucide-react";
 
 import { collectLikedAnchors, createRandomBaseState, generateRoundVariants, getPrimarySlot, getRoundMode, reduceRound } from "./mockEngine";
-import { buildIntentStabilizationSnapshot, type IntentUnderstandingSnapshot } from "./intentStabilization";
+import { buildIntentStabilizationSnapshot, buildIntentStabilizationSnapshotFromAgentState, type IntentUnderstandingSnapshot } from "./intentStabilization";
 import { explainRound } from "./ontology";
 import { buildInitializationExplainability } from "./semanticInitialization";
 import { buildConversationStateLogSummary, type ConversationStateLogSummary, type InitializationExplainabilityResult } from "./explainability";
@@ -205,6 +205,61 @@ function mapMacroStatusToDisplayPhase(status: string) {
   if (status === "base-ready") return "base-captured";
   if (status === "soft-locked") return "lock-candidate";
   return status;
+}
+
+function hasOpeningOptionBeenApplied(agentState: IntentIntakeAgentState | null, optionId: string) {
+  if (!agentState) {
+    return false;
+  }
+
+  return agentState.slots.some((slot) => slot.supportingSignals.includes(optionId));
+}
+
+function buildOpeningSelectionPreview(agentState: IntentIntakeAgentState | null, family: {
+  options: Array<{ id: string; label: string }>;
+} | undefined) {
+  if (!agentState || !family) {
+    return "";
+  }
+
+  const labels = family.options
+    .filter((option) => hasOpeningOptionBeenApplied(agentState, option.id))
+    .map((option) => option.label);
+  if (labels.length === 0) {
+    return "";
+  }
+
+  return labels.join("，");
+}
+
+function DialogueBubble({
+  role,
+  text,
+  compact = false,
+}: {
+  role: "user" | "expert";
+  text: string;
+  compact?: boolean;
+}) {
+  const isUser = role === "user";
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[92%] rounded-[24px] px-4 py-3 text-sm leading-6 shadow-sm ${
+          isUser
+            ? "border border-stone-900 bg-stone-900 text-white"
+            : "border border-stone-200 bg-stone-50 text-stone-800"
+        } ${compact ? "text-[13px] leading-5" : ""}`}
+      >
+        {!compact && (
+          <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${isUser ? "text-white/65" : "text-stone-500"}`}>
+            {isUser ? "你" : "地毯设计顾问"}
+          </div>
+        )}
+        <div>{text}</div>
+      </div>
+    </div>
+  );
 }
 
 function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary: ConversationStateLogSummary; expanded: boolean; onToggle: () => void }) {
@@ -512,6 +567,8 @@ export function SimulatorPage() {
     ? openingFamiliesForFirstTurns[currentOpeningStep]
     : undefined;
   const authoritativeAgentState = currentAgentState ?? intentSnapshot?.conversationState.agentState ?? intentSnapshot?.analysis.agentState ?? null;
+  const openingSelectionPreview = buildOpeningSelectionPreview(authoritativeAgentState, activeOpeningFamily);
+  const composerValue = entryText;
   const referenceAssets = useMemo(() => getReferenceAssets(assetSourceMode), [assetSourceMode]);
   const effectiveMatchMode = useMemo<"stable" | "explore">(() => {
     if (matchMode === "stable" || matchMode === "explore") return matchMode;
@@ -660,7 +717,18 @@ export function SimulatorPage() {
       signal,
       authoritativeAgentState ?? createIntentIntakeAgentState(),
     );
+    const nextSnapshot = buildIntentStabilizationSnapshotFromAgentState({
+      previousSnapshot: intentSnapshot,
+      previousText: intentSnapshot?.text,
+      previousTurnCount: intentSnapshot?.turnCount ?? 0,
+      currentAgentState: nextAgentState,
+      committedReplyText: selectedOption.label,
+      source: "opening-selection",
+    });
     setCurrentAgentState(nextAgentState);
+    setIntentSnapshot(nextSnapshot);
+    setEntryAnalysis(nextSnapshot.analysis);
+    setEntryText("");
   };
 
   const handleConfirmDirection = (slot: IntakeMacroSlot, choice: "confirm" | "defer") => {
@@ -769,39 +837,105 @@ export function SimulatorPage() {
 
   const intentComposer = (
     <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
-      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Intent stabilization</div>
-      <div className="mt-2 text-sm leading-6 text-stone-600">先用 2-3 轮简短交流把方向收一收，再进入第一轮视觉探索。</div>
-      <textarea
-        value={entryText}
-        onChange={(event) => setEntryText(event.target.value)}
-        placeholder={intentSnapshot ? "顺着上面的问题继续回应即可" : "例如：想给卧室找一块更安静一点、不要太花的地毯"}
-        className="mt-4 min-h-[112px] w-full rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-stone-500 focus:bg-white"
-      />
-      <div className="mt-4 flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={handleContinueIntent}
-          disabled={isIntentAnalyzing}
-          className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white"
-        >
-          <Play className="h-4 w-4" /> {isIntentAnalyzing ? "分析中..." : intentSnapshot ? "继续回应" : "开始理解"}
-        </button>
-        <button
-          type="button"
-          onClick={handleStartFromText}
-          disabled={!intentSnapshot?.readyToGenerate}
-          className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Play className="h-4 w-4" /> 进入探索
-        </button>
-        <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-500">最多 7 轮，方向够稳后即可进入探索。</div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Expert-guided conversation</div>
+          <div className="mt-2 max-w-2xl text-sm leading-6 text-stone-600">
+            先像和资深地毯设计师聊 2-3 轮。每次我会先接住你刚说的判断，再只推进一个最值得确认的分叉。
+          </div>
+        </div>
+        <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-500">
+          当前轮次：{intentSnapshot?.turnCount ?? 0}/7
+          <div className="mt-1">{intentSnapshot?.readyToGenerate ? "方向已经够稳，可以进入探索。" : "还在收关键边界，不急着跳图。"} </div>
+        </div>
+      </div>
+
+      <div className="mt-5 max-h-[520px] space-y-4 overflow-y-auto pr-1">
+        {!intentSnapshot && (
+          <DialogueBubble
+            role="expert"
+            text="先告诉我你想让这块地毯解决什么感觉问题。可以从气质、颜色、图案存在感，或者你脑子里的一句意象开始。"
+          />
+        )}
+
+        {intentSnapshot?.conversationState.dialogue.map((turn) => (
+          <div key={turn.id} className="space-y-3">
+            <DialogueBubble role="user" text={turn.userText} />
+            <DialogueBubble role="expert" text={turn.expertReply} />
+          </div>
+        ))}
+      </div>
+
+      {activeOpeningFamily && (
+        <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50 p-4">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">
+            可直接回答这一步
+          </div>
+          <div className="mt-2 text-sm leading-6 text-stone-700">
+            {formatOpeningPromptForPanel(activeOpeningFamily.family.prompt)}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {activeOpeningFamily.options.map((option) => {
+              const selected = hasOpeningOptionBeenApplied(authoritativeAgentState, option.id);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => void handleOpeningOptionClick(option.label, activeOpeningFamily.family)}
+                  disabled={isIntentAnalyzing}
+                  className={`rounded-2xl border px-3 py-2 text-sm transition ${
+                    selected
+                      ? "border-stone-900 bg-stone-900 text-white"
+                      : "border-stone-300 bg-white text-stone-700 hover:border-stone-500"
+                  } ${isIntentAnalyzing ? "cursor-not-allowed opacity-60" : ""}`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+          {activeOpeningFamily.family.allowsMultiple && openingSelectionPreview && (
+            <div className="mt-3 text-xs text-stone-500">
+              当前已选：{openingSelectionPreview}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50 p-4">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">继续补充</div>
+        <textarea
+          value={composerValue}
+          onChange={(event) => setEntryText(event.target.value)}
+          placeholder={intentSnapshot ? "顺着上面的回应继续补一句就行" : "例如：想给卧室找一块更安静一点、不要太花的地毯"}
+          className="mt-3 min-h-[112px] w-full rounded-2xl border border-stone-300 bg-white px-4 py-3 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-stone-500"
+        />
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={handleContinueIntent}
+            disabled={isIntentAnalyzing}
+            className="inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-3 text-sm font-medium text-white"
+          >
+            <Play className="h-4 w-4" /> {isIntentAnalyzing ? "分析中..." : intentSnapshot ? "发送这句" : "开始对话"}
+          </button>
+          <button
+            type="button"
+            onClick={handleStartFromText}
+            disabled={!intentSnapshot?.readyToGenerate}
+            className="inline-flex items-center gap-2 rounded-2xl border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Play className="h-4 w-4" /> 进入探索
+          </button>
+        </div>
       </div>
     </div>
   );
 
   const understandingPanel = (
     <div className="rounded-[24px] border border-stone-200 bg-stone-50 p-4">
-      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Current understanding</div>
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Side summary</div>
       <div className="mt-3 space-y-3 text-sm text-stone-600">
         <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
           <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Current understanding</div>
@@ -827,39 +961,12 @@ export function SimulatorPage() {
           )}
         </div>
         <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Next question</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Expert next move</div>
           <div className="mt-2 text-sm leading-6 text-stone-700">
-            {activeOpeningFamily
+            {intentSnapshot?.followUpQuestion ?? (activeOpeningFamily
               ? formatOpeningPromptForPanel(activeOpeningFamily.family.prompt)
-              : (intentSnapshot?.followUpQuestion ?? "我会先抓最值得确认的一点，再问你下一句。")}
+              : "我会先抓最值得确认的一点，再问你下一句。")}
           </div>
-          {activeOpeningFamily && (
-            <div className="mt-3">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500">
-                Turn {currentOpeningStep + 1} · {activeOpeningFamily.family.family}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {activeOpeningFamily.options.map((option) => {
-                  const selected = entryText.includes(option.label);
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => void handleOpeningOptionClick(option.label, activeOpeningFamily.family)}
-                      className={`rounded-xl border px-3 py-1.5 text-xs transition ${
-                        selected ? "border-stone-900 bg-stone-900 text-white" : "border-stone-300 bg-stone-50 text-stone-700 hover:bg-white"
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-              {activeOpeningFamily.family.allowsMultiple && (
-                <div className="mt-2 text-xs text-stone-500">可先点 1-2 个选项，它们会直接填入上面的输入框，再点“开始理解”。</div>
-              )}
-            </div>
-          )}
         </div>
         {intentSnapshot?.analysis.intakeGoalState && (
           <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
@@ -997,7 +1104,10 @@ export function SimulatorPage() {
         {isImmersiveQaOpen && (
           <div className="fixed left-1/2 top-24 z-30 w-[min(720px,calc(100vw-2rem))] -translate-x-1/2">
             <div className="rounded-[32px] border border-stone-200 bg-white/94 p-5 shadow-lg backdrop-blur-md">
-              {understandingPanel}
+              <div className="space-y-4">
+                {intentComposer}
+                {understandingPanel}
+              </div>
             </div>
           </div>
         )}
@@ -1045,7 +1155,7 @@ export function SimulatorPage() {
         </div>
 
         <div className="mb-6 rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-5 lg:grid-cols-[1.3fr_0.9fr]">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.85fr)]">
             <div>{intentComposer}</div>
             <div>{understandingPanel}</div>
           </div>

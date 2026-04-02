@@ -18,6 +18,7 @@ import type {
 const BASE_CAPTURE_THRESHOLD = 0.5;
 const BASE_CAPTURE_MIN_SIGNALS = 2;
 const LOCK_CANDIDATE_THRESHOLD = 0.68;
+const BASIC_CONFIDENCE_THRESHOLD = 0.38;
 
 const CRITICAL_SLOTS: IntakeMacroSlot[] = ["impression", "color", "pattern", "arrangement"];
 
@@ -134,6 +135,10 @@ function collectPatternIntentSourceCues(analysis: EntryAgentResult) {
   ];
 }
 
+function getPoeticPatternIntent(analysis: EntryAgentResult): Partial<PatternIntentState> | undefined {
+  return analysis.semanticCanvas?.poeticSignal?.patternIntent;
+}
+
 function derivePatternIntentFromResolution(resolution: QuestionResolution | undefined): Partial<PatternIntentState> | undefined {
   if (!resolution?.chosenBranch || !resolution.familyId.startsWith("patternTendency:")) {
     return undefined;
@@ -157,7 +162,7 @@ function derivePatternIntentFromResolution(resolution: QuestionResolution | unde
 }
 
 function mergePatternIntent(
-  previous: PatternIntentState | undefined,
+  previous: Partial<PatternIntentState> | undefined,
   next: Partial<PatternIntentState> | undefined,
 ): PatternIntentState | undefined {
   if (!previous && !next) {
@@ -274,7 +279,7 @@ function getTopDirectionForSlot(input: { analysis: EntryAgentResult; slot: Intak
 
   if (slot === "pattern") {
     const rawCues = analysis.semanticCanvas?.rawCues ?? [];
-    const patternIntent = extractPatternIntent(rawCues);
+    const patternIntent = mergePatternIntent(getPoeticPatternIntent(analysis), extractPatternIntent(rawCues));
     if (patternIntent?.keyElement) {
       return {
         label: patternIntent.keyElement,
@@ -324,27 +329,31 @@ function buildSlotProgress(
     const patternIntent = mergePatternIntent(
       previousSlot?.patternIntent,
       mergePatternIntent(
+        getPoeticPatternIntent(analysis),
         extractPatternIntent(rawCues),
-        derivePatternIntentFromResolution(latestResolution),
       ),
     );
-    if (patternIntent) {
-      result.patternIntent = patternIntent;
+    const resolvedPatternIntent = mergePatternIntent(
+      patternIntent,
+        derivePatternIntentFromResolution(latestResolution),
+    );
+    if (resolvedPatternIntent) {
+      result.patternIntent = resolvedPatternIntent;
       if (!result.topDirection) {
-        result.topDirection = patternIntent.keyElement ?? patternIntent.renderingMode ?? patternIntent.abstractionPreference;
+        result.topDirection = resolvedPatternIntent.keyElement ?? resolvedPatternIntent.renderingMode ?? resolvedPatternIntent.abstractionPreference;
       }
       if (result.topScore < BASE_CAPTURE_THRESHOLD) {
         const structuralSignals = [
-          patternIntent.keyElement ? `pattern:key-element:${patternIntent.keyElement}` : undefined,
-          patternIntent.renderingMode ? `pattern:rendering:${patternIntent.renderingMode}` : undefined,
-          patternIntent.abstractionPreference ? `pattern:abstraction:${patternIntent.abstractionPreference}` : undefined,
-          patternIntent.motionFeeling ? `pattern:motion:${patternIntent.motionFeeling}` : undefined,
+          resolvedPatternIntent.keyElement ? `pattern:key-element:${resolvedPatternIntent.keyElement}` : undefined,
+          resolvedPatternIntent.renderingMode ? `pattern:rendering:${resolvedPatternIntent.renderingMode}` : undefined,
+          resolvedPatternIntent.abstractionPreference ? `pattern:abstraction:${resolvedPatternIntent.abstractionPreference}` : undefined,
+          resolvedPatternIntent.motionFeeling ? `pattern:motion:${resolvedPatternIntent.motionFeeling}` : undefined,
         ].filter(Boolean) as string[];
         const structuralDepth = [
-          patternIntent.keyElement,
-          patternIntent.renderingMode,
-          patternIntent.abstractionPreference,
-          patternIntent.motionFeeling,
+          resolvedPatternIntent.keyElement,
+          resolvedPatternIntent.renderingMode,
+          resolvedPatternIntent.abstractionPreference,
+          resolvedPatternIntent.motionFeeling,
         ].filter(Boolean).length;
         result.supportingSignals = [...new Set([...result.supportingSignals, ...structuralSignals])];
         result.topScore = Number(Math.max(result.topScore, Math.min(0.8, 0.34 + structuralDepth * 0.12)).toFixed(2));
@@ -366,9 +375,14 @@ function computeReadyForFirstGeneration(slots: IntakeSlotProgress[]): { ready: b
   const pattern = slots.find((s) => s.slot === "pattern");
   const color = slots.find((s) => s.slot === "color");
   const arrangement = slots.find((s) => s.slot === "arrangement");
+  const hasBasicConfidence = (slot: IntakeSlotProgress | undefined) =>
+    Boolean(slot && slot.topScore >= BASIC_CONFIDENCE_THRESHOLD && slot.supportingSignals.length >= 1);
 
-  if (impression?.isBaseCaptured && pattern?.isBaseCaptured && color?.isBaseCaptured && arrangement?.isBaseCaptured) {
-    return { ready: true, reason: "all critical macro slots have base directions" };
+  if (
+    hasBasicConfidence(impression) &&
+    [pattern, color, arrangement].some((slot) => hasBasicConfidence(slot))
+  ) {
+    return { ready: true, reason: "overall direction is present and at least one concrete critical slot has basic confidence" };
   }
 
   return { ready: false, reason: "core slot directions not yet established" };

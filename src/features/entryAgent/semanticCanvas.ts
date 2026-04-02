@@ -1,5 +1,7 @@
 import { activeSemanticCanvasProvider } from "./semanticCanvasAdapter";
+import { buildPoeticSemanticCanvas } from "./poeticSemanticLayer";
 import type {
+  ConfidenceLevel,
   EntryAgentAxisHints,
   EntryAgentAxisPath,
   EntryAgentDetectionResult,
@@ -150,13 +152,14 @@ function shouldUseSemanticCanvasMode(input: {
   text: string;
   detection: EntryAgentDetectionResult;
   semanticUnits: SemanticUnit[];
+  poeticCanvas?: FuliSemanticCanvas;
 }) {
   const normalized = normalizeText(input.text);
   if (normalized.length < 4) {
     return false;
   }
 
-  return hasPoeticSignal(input.semanticUnits) || input.semanticUnits.length >= 2 || input.detection.hitFields.length >= 2;
+  return Boolean(input.poeticCanvas) || hasPoeticSignal(input.semanticUnits) || input.semanticUnits.length >= 2 || input.detection.hitFields.length >= 2;
 }
 
 function buildRuleBasedSemanticCanvas(input: {
@@ -248,6 +251,7 @@ function mergeSemanticCanvases(
       likelyQuestionKinds: mergeStringArrays(base.questionImplications.likelyQuestionKinds, extra.questionImplications.likelyQuestionKinds),
       likelyInformationGains: mergeStringArrays(base.questionImplications.likelyInformationGains, extra.questionImplications.likelyInformationGains),
     },
+    poeticSignal: extra.poeticSignal ?? base.poeticSignal,
   };
 }
 
@@ -257,9 +261,11 @@ export async function buildSemanticCanvas(input: {
   semanticUnits: SemanticUnit[];
 }): Promise<FuliSemanticCanvas | undefined> {
   const ruleCanvas = buildRuleBasedSemanticCanvas(input);
+  const poeticCanvas = buildPoeticSemanticCanvas(input.text);
+  const baseCanvas = mergeSemanticCanvases(ruleCanvas, poeticCanvas);
 
-  if (!shouldUseSemanticCanvasMode(input)) {
-    return ruleCanvas;
+  if (!shouldUseSemanticCanvasMode({ ...input, poeticCanvas })) {
+    return baseCanvas;
   }
 
   const llmResult = await activeSemanticCanvasProvider.generate({
@@ -268,7 +274,43 @@ export async function buildSemanticCanvas(input: {
     semanticUnits: input.semanticUnits,
   });
 
-  return mergeSemanticCanvases(ruleCanvas, llmResult.canvas);
+  return mergeSemanticCanvases(baseCanvas, llmResult.canvas);
+}
+
+function inferCanvasConfidence(canvas: FuliSemanticCanvas): ConfidenceLevel {
+  if ((canvas.confidence ?? 0) >= 0.8) return "high";
+  if ((canvas.confidence ?? 0) >= 0.56) return "medium";
+  return "low";
+}
+
+export function enrichDetectionWithSemanticCanvas(
+  detection: EntryAgentDetectionResult,
+  semanticCanvas: FuliSemanticCanvas | undefined,
+): EntryAgentDetectionResult {
+  if (!semanticCanvas || semanticCanvas.slotMappings.targetFields.length === 0) {
+    return detection;
+  }
+
+  const hitFields = unique([...detection.hitFields, ...semanticCanvas.slotMappings.targetFields]);
+  const evidence = { ...detection.evidence };
+  const confidence = { ...detection.confidence };
+  const sharedEvidence = unique([
+    ...(semanticCanvas.poeticSignal?.hits.map((hit) => hit.matchedText) ?? []),
+    ...semanticCanvas.rawCues,
+    ...semanticCanvas.narrativePolicy.mustPreserve,
+  ]);
+  const inferredConfidence = inferCanvasConfidence(semanticCanvas);
+
+  semanticCanvas.slotMappings.targetFields.forEach((field) => {
+    evidence[field] = unique([...(evidence[field] ?? []), ...sharedEvidence]).slice(0, 5);
+    confidence[field] = confidence[field] ?? inferredConfidence;
+  });
+
+  return {
+    hitFields,
+    evidence,
+    confidence,
+  };
 }
 
 function tokenSet(canvas: FuliSemanticCanvas) {
@@ -341,6 +383,10 @@ function inferDisambiguationAxes(canvas: FuliSemanticCanvas, field: HighValueFie
 }
 
 function buildColorAxisHints(canvas: FuliSemanticCanvas): EntryAgentAxisHints {
+  if (canvas.poeticSignal?.axisHints?.color) {
+    return { color: canvas.poeticSignal.axisHints.color };
+  }
+
   const tokens = tokenSet(canvas);
   const hints: EntryAgentAxisHints = { color: {} };
 
@@ -366,6 +412,10 @@ function buildColorAxisHints(canvas: FuliSemanticCanvas): EntryAgentAxisHints {
 }
 
 function buildImpressionAxisHints(canvas: FuliSemanticCanvas): EntryAgentAxisHints {
+  if (canvas.poeticSignal?.axisHints?.impression) {
+    return { impression: canvas.poeticSignal.axisHints.impression };
+  }
+
   const tokens = tokenSet(canvas);
   const hints: EntryAgentAxisHints = { impression: {} };
 
@@ -388,7 +438,39 @@ function buildImpressionAxisHints(canvas: FuliSemanticCanvas): EntryAgentAxisHin
   return hints;
 }
 
+function buildPatternAxisHints(canvas: FuliSemanticCanvas): EntryAgentAxisHints {
+  if (canvas.poeticSignal?.axisHints?.motif) {
+    return { motif: canvas.poeticSignal.axisHints.motif };
+  }
+
+  const tokens = tokenSet(canvas);
+  const hints: EntryAgentAxisHints = { motif: {} };
+
+  if (tokenMatches(tokens, ["sparse", "minimal", "low-density", "low visual weight"])) {
+    hints.motif!.complexity = 0.28;
+  } else if (tokenMatches(tokens, ["dense", "clustered", "layered"])) {
+    hints.motif!.complexity = 0.68;
+  }
+
+  if (tokenMatches(tokens, ["geometry", "structured", "clear-edged"])) {
+    hints.motif!.geometry = 0.68;
+  }
+
+  if (tokenMatches(tokens, ["organic", "flowing", "blurred", "bamboo", "mist"])) {
+    hints.motif!.organic = 0.72;
+  }
+
+  return hints;
+}
+
 function buildCanvasCandidateLabel(canvas: FuliSemanticCanvas, field: HighValueField) {
+  if (canvas.poeticSignal?.hits.length) {
+    const cueSummary = canvas.poeticSignal.hits.slice(0, 2).map((hit) => hit.matchedText).join(" / ");
+    if (field === "colorMood") return `${cueSummary} color mood`;
+    if (field === "overallImpression") return `${cueSummary} impression`;
+    if (field === "patternTendency") return `${cueSummary} pattern intent`;
+  }
+
   if (field === "colorMood" && canvas.narrativePolicy.mustPreserve.some((cue) => ["绿意", "绿意盎然", "春意", "草色"].includes(cue))) {
     return "spring green presence";
   }
@@ -405,6 +487,11 @@ function buildCanvasCandidateLabel(canvas: FuliSemanticCanvas, field: HighValueF
 }
 
 function buildCanvasSemanticHints(canvas: FuliSemanticCanvas, field: HighValueField) {
+  const poeticHints = canvas.poeticSignal?.fieldSemanticHints?.[field];
+  if (poeticHints) {
+    return poeticHints as Record<string, string | string[]>;
+  }
+
   if (field === "colorMood" && canvas.narrativePolicy.mustPreserve.some((cue) => ["绿意", "绿意盎然"].includes(cue))) {
     return { colorMood: canvas.narrativePolicy.mustPreserve.includes("草色") ? "spring-green-subtle" : "spring-green" } as Record<string, string | string[]>;
   }
@@ -432,6 +519,10 @@ function buildCanvasAxisHints(canvas: FuliSemanticCanvas, field: HighValueField)
 
   if (field === "overallImpression") {
     return buildImpressionAxisHints(canvas);
+  }
+
+  if (field === "patternTendency") {
+    return buildPatternAxisHints(canvas);
   }
 
   return {};
@@ -492,6 +583,12 @@ export function getSemanticCanvasQuestionPrompt(
 ) {
   if (!semanticCanvas) {
     return undefined;
+  }
+
+  if (semanticCanvas.poeticSignal?.followupHints.length) {
+    if (gap.targetField === "colorMood" || gap.targetField === "overallImpression" || gap.targetField === "patternTendency") {
+      return semanticCanvas.poeticSignal.followupHints[0];
+    }
   }
 
   if (

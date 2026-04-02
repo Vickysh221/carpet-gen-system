@@ -7,7 +7,7 @@ import { resolvePrototypeCandidates } from "./prototypeMatching";
 import { buildIntentIntakeGoalState } from "./intakeGoalState";
 import { buildQuestionPlan } from "./questionPlanning";
 import { resolvePreviousQuestion } from "./questionResolution";
-import { buildSemanticCanvas, buildSemanticCanvasCandidates } from "./semanticCanvas";
+import { buildSemanticCanvas, buildSemanticCanvasCandidates, enrichDetectionWithSemanticCanvas } from "./semanticCanvas";
 import { decomposeSemanticCues } from "./semanticCueDecomposition";
 import { buildSemanticGaps } from "./semanticGapPlanner";
 import { buildSemanticUnderstanding } from "./semanticUnderstanding";
@@ -16,13 +16,14 @@ import { deriveUpdatedSlotStates } from "./slotStateMachine";
 import type { EntryAgentInput, EntryAgentResult } from "./types";
 
 export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAgentResult> {
-  const detection = detectHighValueFieldHits(input.text);
-  const semanticUnits = decomposeSemanticCues(input, detection);
+  const initialDetection = detectHighValueFieldHits(input.text);
+  const semanticUnits = decomposeSemanticCues(input, initialDetection);
   const semanticCanvas = await buildSemanticCanvas({
     text: input.text,
-    detection,
+    detection: initialDetection,
     semanticUnits,
   });
+  const detection = enrichDetectionWithSemanticCanvas(initialDetection, semanticCanvas);
   const semanticCanvasCandidates = buildSemanticCanvasCandidates({
     semanticCanvas,
     text: input.text,
@@ -70,6 +71,7 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     questionHistory: input.questionHistory,
     bridge,
     hitFields: detection.hitFields,
+    latestReplyText: input.latestReplyText,
     resolutionState,
     latestResolution,
   });

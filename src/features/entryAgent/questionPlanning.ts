@@ -1,4 +1,5 @@
 import { activeAnswerAlignmentProvider } from "./answerAlignmentAdapter";
+import { detectHighValueFieldHits } from "./fieldHitDetection";
 import { getSlotQuestionSpec } from "./slotQuestionSpec";
 import type { AnswerAlignment, EntryAgentResult, NextQuestionCandidate, HighValueField, QuestionPlan, QuestionResolution, QuestionResolutionState, QuestionTrace, SemanticGap } from "./types";
 
@@ -262,22 +263,52 @@ function buildRuleBasedAnswerAlignment(input: {
   previousQuestion?: QuestionTrace;
   bridge: Pick<EntryAgentResult, "semanticCanvas">;
   hitFields: EntryAgentResult["hitFields"];
+  latestReplyText?: string;
+  latestResolution?: QuestionResolution;
 }): AnswerAlignment | undefined {
   const previousQuestion = input.previousQuestion;
+  const latestReplyHitFields = input.latestReplyText ? detectHighValueFieldHits(input.latestReplyText).hitFields : [];
+  const activeReplyFields = latestReplyHitFields.length > 0 ? latestReplyHitFields : input.hitFields;
   if (!previousQuestion) {
     return {
       status: "initial",
-      introducedFields: input.hitFields,
+      introducedFields: activeReplyFields,
       note: "首轮输入，还没有上一问需要对齐。",
       source: "rules",
       confidence: 0.96,
     };
   }
 
-  const introducedFields = input.hitFields.filter((field) => field !== previousQuestion.targetField);
-  const answeredPreviousField = previousQuestion.targetField ? input.hitFields.includes(previousQuestion.targetField) : false;
+  const latestResolution = input.latestResolution;
+  const resolvedPreviousFamily =
+    latestResolution?.familyId === previousQuestion.questionFamilyId &&
+    (latestResolution?.status === "resolved" || latestResolution?.status === "narrowed");
+  const introducedFields = activeReplyFields.filter((field) => field !== previousQuestion.targetField);
+  const answeredPreviousField = resolvedPreviousFamily || (previousQuestion.targetField ? activeReplyFields.includes(previousQuestion.targetField) : false);
   const answeredPreviousAxes = previousQuestion.targetAxes.some((axis) => input.bridge.semanticCanvas?.slotMappings.targetAxes.includes(axis));
   const poeticShift = introducedFields.length > 0 && (input.bridge.semanticCanvas?.rawCues.length ?? 0) > 0;
+  const fullyResolvedPreviousFamily = latestResolution?.familyId === previousQuestion.questionFamilyId && latestResolution?.status === "resolved";
+  const narrowedPreviousFamily = latestResolution?.familyId === previousQuestion.questionFamilyId && latestResolution?.status === "narrowed";
+
+  if (fullyResolvedPreviousFamily && introducedFields.length === 0) {
+    return {
+      status: "answered",
+      introducedFields,
+      note: "用户这句是在顺着上一轮的问题选边，已经把那道分叉收窄到了明确方向。",
+      source: "rules",
+      confidence: 0.9,
+    };
+  }
+
+  if (narrowedPreviousFamily && introducedFields.length === 0) {
+    return {
+      status: "partial",
+      introducedFields,
+      note: "用户这句明显是在回应上一轮的问题，方向已经靠近其中一支，但边界还没有完全锁死。",
+      source: "rules",
+      confidence: 0.84,
+    };
+  }
 
   if (!answeredPreviousField && !answeredPreviousAxes && poeticShift) {
     return {
@@ -312,6 +343,8 @@ async function evaluateAnswerAlignment(input: {
   previousQuestion?: QuestionTrace;
   bridge: Pick<EntryAgentResult, "semanticCanvas">;
   hitFields: EntryAgentResult["hitFields"];
+  latestReplyText?: string;
+  latestResolution?: QuestionResolution;
 }): Promise<AnswerAlignment | undefined> {
   const ruleAlignment = buildRuleBasedAnswerAlignment(input);
   if (!input.previousQuestion || !input.bridge.semanticCanvas) {
@@ -437,6 +470,7 @@ export async function buildQuestionPlan(input: {
   questionHistory?: QuestionTrace[];
   bridge: Pick<EntryAgentResult, "semanticCanvas">;
   hitFields: EntryAgentResult["hitFields"];
+  latestReplyText?: string;
   resolutionState?: QuestionResolutionState;
   latestResolution?: QuestionResolution;
 }): Promise<{
@@ -450,6 +484,8 @@ export async function buildQuestionPlan(input: {
     previousQuestion: input.previousQuestion,
     bridge: input.bridge,
     hitFields: input.hitFields,
+    latestReplyText: input.latestReplyText,
+    latestResolution: input.latestResolution,
   });
   const resolutionState = input.resolutionState;
   const resolution = input.latestResolution;

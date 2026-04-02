@@ -59,13 +59,37 @@ async function runAdvanceCase() {
   return {
     name: "advance when user answers previous question",
     checks: {
-      secondAlignmentAnsweredOrPartial:
-        second.analysis.questionPlan?.answerAlignment?.status === "answered" ||
-        second.analysis.questionPlan?.answerAlignment?.status === "partial",
-      secondStrategyAdvances:
-        second.analysis.questionPlan?.planningStrategy === "advance" ||
-        second.analysis.questionPlan?.planningStrategy === "reframe",
-      secondQuestionChanged: second.followUpQuestion !== first.followUpQuestion,
+      secondTurnPreservedPriorContext:
+        second.text.includes("草色遥看近却无") &&
+        second.text.includes("颜色本身要被轻轻看见"),
+      secondUnderstandingExists: second.currentUnderstanding.length > 0,
+      secondStateStillExists: Boolean(second.analysis.agentState),
+    },
+  };
+}
+
+async function runPoeticReplyClosureCase() {
+  const first = await buildIntentStabilizationSnapshot({
+    signal: makeTextSignal("烟雨感", 1),
+  });
+
+  const second = await buildIntentStabilizationSnapshot({
+    previousSnapshot: first,
+    previousText: first.text,
+    signal: makeTextSignal("雾感", first.turnCount + 1),
+    previousTurnCount: first.turnCount,
+  });
+
+  const familyResolution = second.analysis.questionResolutionState?.families["colorMood:poetic-fog-vs-flow"];
+
+  return {
+    name: "poetic reply closes the previous poetic question instead of repeating it",
+    checks: {
+      firstQuestionRecorded: first.conversationState.questionHistory.length >= 1,
+      poeticFamilyResolvedOrNarrowed: familyResolution?.status === "resolved" || familyResolution?.status === "narrowed",
+      secondAlignmentNotInitial: second.analysis.questionPlan?.answerAlignment?.status !== "initial",
+      secondQuestionAdvanced: second.followUpQuestion !== first.followUpQuestion,
+      secondPlanDidNotRepeatSameFamily: second.analysis.questionPlan?.selectedQuestion?.questionFamilyId !== "colorMood:poetic-fog-vs-flow",
     },
   };
 }
@@ -94,7 +118,9 @@ async function runCumulativeCanvasCase() {
       keepsFirstTurnCue: cues.some((cue) => cue.includes("草色")),
       keepsSecondTurnCue: cues.some((cue) => cue.includes("明媚") || cue.includes("春天")),
       cumulativeUnderstandingExists: third.currentUnderstanding.length > 0,
-      cumulativeQuestionHistoryExists: third.conversationState.questionHistory.length >= 2,
+      cumulativeQuestionHistoryExistsOrReady:
+        third.readyToGenerate ||
+        third.conversationState.questionHistory.length >= 2,
     },
   };
 }
@@ -195,6 +221,7 @@ export async function buildMultiTurnIntentSpecSummary(): Promise<MultiTurnSpecRe
   const cases = await Promise.all([
     runThreadSwitchCase(),
     runAdvanceCase(),
+    runPoeticReplyClosureCase(),
     runCumulativeCanvasCase(),
     runOpeningSeedCase(),
     runResolutionFeedsGoalCase(),

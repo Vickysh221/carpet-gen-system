@@ -111,12 +111,29 @@ function pickReadingForField(readings: InterpretationCandidate[], field: HighVal
     .sort((left, right) => right.confidence - left.confidence)[0];
 }
 
-function buildQuestionFamilyId(field: HighValueField | undefined, mode: SlotQuestionMode | undefined, type: SemanticGap["type"]) {
+function inferPromptSpecificFamilyId(field: HighValueField | undefined, promptOverride?: string) {
+  if (!field || !promptOverride) {
+    return undefined;
+  }
+
+  if (field === "colorMood" && promptOverride.includes("雾感") && promptOverride.includes("水汽流动感")) {
+    return "colorMood:poetic-fog-vs-flow";
+  }
+
+  return undefined;
+}
+
+function buildQuestionFamilyId(
+  field: HighValueField | undefined,
+  mode: SlotQuestionMode | undefined,
+  type: SemanticGap["type"],
+  promptOverride?: string,
+) {
   if (!field) {
     return `${type}:unknown`;
   }
 
-  return `${field}:${mode ?? type}`;
+  return inferPromptSpecificFamilyId(field, promptOverride) ?? `${field}:${mode ?? type}`;
 }
 
 function pickQuestionMode(input: {
@@ -204,6 +221,7 @@ export function buildSemanticGaps(input: {
         reason: group.decision,
         reading: pickReadingForField(input.interpretationMerge.finalResolvedReadings, targetField),
       });
+      const questionPromptOverride = buildQuestionPromptOverride({ targetField, targetSlot: group.primarySlot });
       gaps.push({
         id: `prototype-conflict:${group.id}:${index}`,
         type: "prototype-conflict",
@@ -213,14 +231,14 @@ export function buildSemanticGaps(input: {
         targetAxes: planning.targetAxes,
         questionMode: planning.questionMode,
         questionKind: "contrast",
-        questionFamilyId: buildQuestionFamilyId(targetField, planning.questionMode, "prototype-conflict"),
+        questionFamilyId: buildQuestionFamilyId(targetField, planning.questionMode, "prototype-conflict", questionPromptOverride),
         relatedReadingIds: group.participatingReadingIds,
         reason: group.decision,
         evidence: [group.decision],
         expectedGain: planning.expectedGain,
         informationGainHint: "用户回答后，可减少两个可主导解释之间谁该成为主方向的不确定性。",
         rankingReason: "主解释存在冲突，优先级高于单纯补 missing slot。",
-        questionPromptOverride: buildQuestionPromptOverride({ targetField, targetSlot: group.primarySlot }),
+        questionPromptOverride,
       });
   });
 
@@ -231,6 +249,10 @@ export function buildSemanticGaps(input: {
       reason: ambiguity.note,
       reading: pickReadingForField(input.interpretationMerge.finalResolvedReadings, ambiguity.field),
     });
+    const questionPromptOverride = buildQuestionPromptOverride({
+      targetField: ambiguity.field,
+      targetSlot: mapFieldToSlot(ambiguity.field),
+    });
     gaps.push({
       id: `ambiguity:${ambiguity.field}:${index}`,
       type: "unresolved-ambiguity",
@@ -240,17 +262,14 @@ export function buildSemanticGaps(input: {
       targetAxes: planning.targetAxes,
       questionMode: planning.questionMode,
       questionKind: "clarify",
-      questionFamilyId: buildQuestionFamilyId(ambiguity.field, planning.questionMode, "unresolved-ambiguity"),
+      questionFamilyId: buildQuestionFamilyId(ambiguity.field, planning.questionMode, "unresolved-ambiguity", questionPromptOverride),
       relatedReadingIds: [],
       reason: ambiguity.note,
       evidence: [ambiguity.note],
       expectedGain: planning.expectedGain,
       informationGainHint: "用户回答后，可减少当前词语在不同槽位或不同读法之间摇摆的不确定性。",
       rankingReason: "当前语义存在未决歧义，需要先确认用户真正想表达的方向。",
-      questionPromptOverride: buildQuestionPromptOverride({
-        targetField: ambiguity.field,
-        targetSlot: mapFieldToSlot(ambiguity.field),
-      }),
+      questionPromptOverride,
     });
   });
 
@@ -263,6 +282,10 @@ export function buildSemanticGaps(input: {
         reason: `${unit.cue} 目前只形成 subtle 弱信号。`,
         reading: pickReadingForField(input.interpretationMerge.finalResolvedReadings, unit.targetField),
       });
+      const questionPromptOverride = buildQuestionPromptOverride({
+        targetField: unit.targetField,
+        targetSlot: unit.targetSlot,
+      });
       gaps.push({
         id: `weak-anchor:${unit.id}`,
         type: "weak-anchor",
@@ -272,7 +295,7 @@ export function buildSemanticGaps(input: {
         targetAxes: unit.disambiguationAxes,
         questionMode: weakPlanning.questionMode,
         questionKind: unit.questionKindHint,
-        questionFamilyId: buildQuestionFamilyId(unit.targetField, weakPlanning.questionMode, "weak-anchor"),
+        questionFamilyId: buildQuestionFamilyId(unit.targetField, weakPlanning.questionMode, "weak-anchor", questionPromptOverride),
         relatedReadingIds: input.interpretationMerge.candidateReadings
           .filter((reading) => reading.matchedSemanticUnitIds?.includes(unit.id))
           .map((reading) => reading.id),
@@ -282,10 +305,7 @@ export function buildSemanticGaps(input: {
         expectedGain: "确认这个 subtle 方向是否值得稳定保留，而不是只作为弱修饰。",
         informationGainHint: unit.informationGainHint,
         rankingReason: "poetic / retrieval-only cue 只能先作为 weak-anchor，避免弱证据过早主导 narrative。",
-        questionPromptOverride: buildQuestionPromptOverride({
-          targetField: unit.targetField,
-          targetSlot: unit.targetSlot,
-        }),
+        questionPromptOverride,
       });
     });
 
@@ -314,6 +334,7 @@ export function buildSemanticGaps(input: {
       reason: targetReading ? `${field} 已经有初步方向，但内部取向还没收清楚。` : `${field} 还没有稳定 anchor。`,
       reading: targetReading,
     });
+    const questionPromptOverride = buildQuestionPromptOverride({ targetField: field, targetSlot: mapFieldToSlot(field) });
     gaps.push({
       id: `missing-slot:${field}`,
       type: "missing-slot",
@@ -323,7 +344,7 @@ export function buildSemanticGaps(input: {
       targetAxes: planning.targetAxes,
       questionMode: planning.questionMode,
       questionKind: targetReading?.questionKindHint ?? "anchor",
-      questionFamilyId: buildQuestionFamilyId(field, planning.questionMode, "missing-slot"),
+      questionFamilyId: buildQuestionFamilyId(field, planning.questionMode, "missing-slot", questionPromptOverride),
       relatedReadingIds: [],
       reason: targetReading ? `${field} 已经有初步方向，但内部取向还没收清楚。` : `${field} 还没有稳定 anchor。`,
       evidence: [field],
@@ -333,7 +354,7 @@ export function buildSemanticGaps(input: {
       rankingReason: targetReading
         ? "当前已有一个初步方向，优先继续收窄这个 field 的内部语义。"
         : "当前缺少关键槽位 anchor，需要补齐核心风格信息。",
-      questionPromptOverride: buildQuestionPromptOverride({ targetField: field, targetSlot: mapFieldToSlot(field) }),
+      questionPromptOverride,
     });
   }
 

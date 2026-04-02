@@ -27,10 +27,45 @@ function mergeResolutionRecord(
 function resolveBranchForFamily(input: {
   familyId: QuestionFamilyId;
   latestReplyText?: string;
+  previousQuestionPrompt?: string;
 }): Pick<QuestionResolution, "status" | "chosenBranch" | "rejectedBranches" | "reason"> | undefined {
   const text = normalizeText(input.latestReplyText);
   if (!text) {
     return undefined;
+  }
+
+  if (input.familyId === "colorMood:poetic-fog-vs-flow") {
+    const fogCues = ["雾感", "雾一点", "更雾", "空濛", "朦胧", "迷蒙"];
+    const flowCues = ["水汽流动", "流动感", "流动一点", "水汽", "流动", "湿润"];
+    const pickedFog = hasAny(text, fogCues);
+    const pickedFlow = hasAny(text, flowCues);
+
+    if (pickedFog && !pickedFlow) {
+      return {
+        status: "resolved",
+        chosenBranch: "fog",
+        rejectedBranches: ["flow"],
+        reason: "用户顺着上一轮的诗性追问，明确把颜色气息收向雾感这一支。",
+      };
+    }
+
+    if (pickedFlow && !pickedFog) {
+      return {
+        status: "resolved",
+        chosenBranch: "flow",
+        rejectedBranches: ["fog"],
+        reason: "用户顺着上一轮的诗性追问，明确把颜色气息收向水汽流动感这一支。",
+      };
+    }
+
+    if ((pickedFog || pickedFlow) && input.previousQuestionPrompt?.includes("雾感")) {
+      return {
+        status: "narrowed",
+        chosenBranch: pickedFog ? "fog" : "flow",
+        rejectedBranches: [],
+        reason: "用户明显是在回应上一轮的雾感/流动感分叉，但表述还没完全排掉另一侧。",
+      };
+    }
   }
 
   if (input.familyId === "patternTendency:contrast-complexity-vs-geometry") {
@@ -162,6 +197,7 @@ export function resolvePreviousQuestion(input: {
   const branchResolution = resolveBranchForFamily({
     familyId: previousQuestion.questionFamilyId,
     latestReplyText: input.latestReplyText,
+    previousQuestionPrompt: previousQuestion.prompt,
   });
 
   if (!branchResolution) {

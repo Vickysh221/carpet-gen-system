@@ -1,4 +1,4 @@
-import { type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeAgentState, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
+import { buildDerivedEntryAnalysisFromAgentState, type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeAgentState, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
 import { processIntakeSignal } from "@/features/entryAgent/signalProcessor";
 import { renderPersonaQuestionBridge, renderPersonaUnderstanding } from "./personaRenderer";
 import { buildUnderstandingSummary, renderUnderstandingSummary } from "./understandingSummary";
@@ -22,6 +22,7 @@ interface TurnSemanticRecord {
 
 interface IntentConversationState {
   turns: TurnSemanticRecord[];
+  dialogue: ExpertDialogueTurn[];
   questionHistory: QuestionTrace[];
   cumulativeCanvas?: FuliSemanticCanvas;
   resolutionState?: EntryAgentResult["questionResolutionState"];
@@ -30,11 +31,21 @@ interface IntentConversationState {
   lockedSlots: Partial<Record<IntakeMacroSlot, string>>;
 }
 
+export interface ExpertDialogueTurn {
+  id: string;
+  turnIndex: number;
+  source: "text" | "opening-selection";
+  userText: string;
+  expertReply: string;
+  nextQuestion: string;
+}
+
 interface IntentUnderstandingSnapshot {
   text: string;
   analysis: EntryAgentResult;
   currentUnderstanding: string;
   followUpQuestion: string;
+  expertReply: string;
   readyToGenerate: boolean;
   turnCount: number;
   canAskAnotherQuestion: boolean;
@@ -247,9 +258,104 @@ function buildCumulativeUnderstanding(input: {
   return getSemanticUnderstandingNarrative(input.analysis);
 }
 
+function mapFieldToFriendlyLabel(field: HighValueField | undefined) {
+  if (field === "overallImpression") return "整体气质";
+  if (field === "colorMood") return "颜色层";
+  if (field === "patternTendency") return "图案语言";
+  if (field === "arrangementTendency") return "排布方式";
+  if (field === "spaceContext") return "使用场景";
+  return "方向";
+}
+
+function buildShiftSummary(input: {
+  analysis: EntryAgentResult;
+  previousAnalysis?: EntryAgentResult;
+}) {
+  const patternIntent = input.analysis.intakeGoalState?.slots.find((slot) => slot.slot === "pattern")?.patternIntent;
+  if (patternIntent?.keyElement && patternIntent.renderingMode) {
+    return `这会把图案语言先收向 ${patternIntent.keyElement}，表达方式更偏 ${patternIntent.renderingMode}。`;
+  }
+
+  const focus = input.analysis.questionPlan?.selectedTargetField;
+  if (focus) {
+    return `现在真正被你推实的是${mapFieldToFriendlyLabel(focus)}，后面的判断会围着这条线继续收。`;
+  }
+
+  const previousSlots = input.previousAnalysis?.intakeGoalState?.slots ?? [];
+  const strengthened = input.analysis.intakeGoalState?.slots.find((slot) => {
+    const previous = previousSlots.find((item) => item.slot === slot.slot)?.topScore ?? 0;
+    return slot.topScore - previous >= 0.12;
+  });
+  if (strengthened) {
+    return `${mapFieldToFriendlyLabel(
+      strengthened.slot === "impression"
+        ? "overallImpression"
+        : strengthened.slot === "color"
+          ? "colorMood"
+          : strengthened.slot === "pattern"
+            ? "patternTendency"
+            : strengthened.slot === "arrangement"
+              ? "arrangementTendency"
+              : "spaceContext",
+    )}这一层比刚才明显更稳了。`;
+  }
+
+  return "这次输入把原来有点散的感觉先压成了一个可继续推进的方向。";
+}
+
+function buildSourceAwareOpening(input: {
+  source: "text" | "opening-selection";
+  userText: string;
+  analysis: EntryAgentResult;
+}) {
+  if (input.source === "opening-selection") {
+    return `我先按你刚才选的“${input.userText}”来收，而且会把它当成真实方向，不只是记一条偏好。`;
+  }
+
+  const focus = input.analysis.questionPlan?.selectedTargetField;
+  if (focus === "patternTendency") {
+    return "这句话里真正起作用的，不是字面对象本身，而是它对图案密度、节奏和边界的要求。";
+  }
+  if (focus === "colorMood") {
+    return "我先不把它压成单一颜色词，而是按它带出来的明度、饱和度和气息去判断。";
+  }
+  if (focus === "overallImpression") {
+    return "我先抓的是它推动的整体气质，而不是表面上那些形容词。";
+  }
+
+  return "我先抓住这句话里真正起作用的感知特征，再决定下一步该往哪条线收。";
+}
+
+function buildExpertReply(input: {
+  source: "text" | "opening-selection";
+  userText: string;
+  analysis: EntryAgentResult;
+  previousAnalysis?: EntryAgentResult;
+  currentUnderstanding: string;
+  nextQuestion: string;
+}) {
+  return [
+    buildSourceAwareOpening({
+      source: input.source,
+      userText: input.userText,
+      analysis: input.analysis,
+    }),
+    input.currentUnderstanding,
+    buildShiftSummary({
+      analysis: input.analysis,
+      previousAnalysis: input.previousAnalysis,
+    }),
+    `接下来我只想把这一处分叉问清：${input.nextQuestion}`,
+  ].join(" ");
+}
+
 
 function shouldGenerateNow(analysis: EntryAgentResult, turnCount: number) {
   const mappingReady = analysis.semanticMapping?.confidenceSummary.readyForFirstBatch ?? false;
+  if (turnCount < 3) {
+    return false;
+  }
+
   // Goal-state driven: readyForFirstGeneration is the primary gate.
   if (analysis.intakeGoalState?.readyForFirstGeneration && mappingReady) return true;
 
@@ -306,6 +412,20 @@ export async function buildIntentStabilizationSnapshot({
   const selectedPrompt = readyToGenerate
     ? rawSelectedPrompt
     : `${renderPersonaQuestionBridge({ analysis, goalState: analysis.intakeGoalState })} ${rawSelectedPrompt}`.trim();
+  const currentUnderstanding = buildCumulativeUnderstanding({
+    analysis,
+    cumulativeCanvas,
+    answerAlignment,
+    turnCount,
+  });
+  const expertReply = buildExpertReply({
+    source: "text",
+    userText: signal.text.trim(),
+    analysis,
+    previousAnalysis: previousSnapshot?.analysis,
+    currentUnderstanding,
+    nextQuestion: selectedPrompt,
+  });
   const nextQuestionHistory = analysis.agentState?.questionHistory ?? previousQuestionHistory;
   const conversationState: IntentConversationState = {
     turns: [
@@ -315,6 +435,17 @@ export async function buildIntentStabilizationSnapshot({
         replyText: signal.text.trim(),
         hitFields: analysis.hitFields,
         answerAlignment,
+      },
+    ],
+    dialogue: [
+      ...(previousSnapshot?.conversationState.dialogue ?? []),
+      {
+        id: `text-turn-${turnCount}`,
+        turnIndex: turnCount,
+        source: "text",
+        userText: signal.text.trim(),
+        expertReply,
+        nextQuestion: selectedPrompt,
       },
     ],
     questionHistory: nextQuestionHistory,
@@ -327,17 +458,96 @@ export async function buildIntentStabilizationSnapshot({
   return {
     text,
     analysis,
-    currentUnderstanding: buildCumulativeUnderstanding({
-      analysis,
-      cumulativeCanvas,
-      answerAlignment,
-      turnCount,
-    }),
+    currentUnderstanding,
     followUpQuestion: selectedPrompt,
+    expertReply,
     readyToGenerate,
     turnCount,
     canAskAnotherQuestion: !readyToGenerate && turnCount < HARD_TURN_CAP,
     conversationState,
+  };
+}
+
+export function buildIntentStabilizationSnapshotFromAgentState(input: {
+  previousSnapshot?: IntentUnderstandingSnapshot | null;
+  previousText?: string;
+  previousTurnCount?: number;
+  currentAgentState: IntentIntakeAgentState;
+  committedReplyText?: string;
+  source?: "text" | "opening-selection";
+}): IntentUnderstandingSnapshot {
+  const turnCount = Math.min((input.previousTurnCount ?? 0) + 1, HARD_TURN_CAP);
+  const analysis = buildDerivedEntryAnalysisFromAgentState(input.currentAgentState);
+  const cumulativeCanvas = mergeSemanticCanvas(input.previousSnapshot?.conversationState.cumulativeCanvas, analysis.semanticCanvas);
+  const readyToGenerate = shouldGenerateNow(analysis, turnCount);
+  const committedText = input.committedReplyText?.trim() ?? "";
+  const text = committedText ? joinUserTexts(input.previousText, committedText) : (input.previousText ?? "");
+  const rawSelectedPrompt = readyToGenerate
+    ? "我已经有一个初步方向了，我们先进入第一轮看看。"
+    : buildFollowUpQuestion(analysis);
+  const selectedPrompt = readyToGenerate
+    ? rawSelectedPrompt
+    : `${renderPersonaQuestionBridge({ analysis, goalState: analysis.intakeGoalState })} ${rawSelectedPrompt}`.trim();
+  const answerAlignment = {
+    status: "initial" as const,
+    introducedFields: analysis.hitFields,
+    note: "这一轮通过 opening 选项先建立了主方向。",
+  };
+  const currentUnderstanding = buildCumulativeUnderstanding({
+    analysis,
+    cumulativeCanvas,
+    answerAlignment,
+    turnCount,
+  });
+  const expertReply = buildExpertReply({
+    source: input.source ?? "opening-selection",
+    userText: committedText || "这次选择",
+    analysis,
+    previousAnalysis: input.previousSnapshot?.analysis,
+    currentUnderstanding,
+    nextQuestion: selectedPrompt,
+  });
+
+  return {
+    text,
+    analysis,
+    currentUnderstanding,
+    followUpQuestion: selectedPrompt,
+    expertReply,
+    readyToGenerate,
+    turnCount,
+    canAskAnotherQuestion: !readyToGenerate && turnCount < HARD_TURN_CAP,
+    conversationState: {
+      turns: [
+        ...(input.previousSnapshot?.conversationState.turns ?? []),
+        ...(committedText
+          ? [{
+              turnIndex: turnCount,
+              replyText: committedText,
+              hitFields: analysis.hitFields,
+              answerAlignment,
+            }]
+          : []),
+      ],
+      dialogue: [
+        ...(input.previousSnapshot?.conversationState.dialogue ?? []),
+        ...(committedText
+          ? [{
+              id: `${input.source ?? "opening-selection"}-turn-${turnCount}`,
+              turnIndex: turnCount,
+              source: input.source ?? "opening-selection",
+              userText: committedText,
+              expertReply,
+              nextQuestion: selectedPrompt,
+            } satisfies ExpertDialogueTurn]
+          : []),
+      ],
+      questionHistory: analysis.agentState?.questionHistory ?? input.previousSnapshot?.conversationState.questionHistory ?? [],
+      cumulativeCanvas,
+      resolutionState: analysis.agentState?.resolutionState ?? analysis.questionResolutionState,
+      agentState: analysis.agentState,
+      lockedSlots: input.previousSnapshot?.conversationState.lockedSlots ?? {},
+    },
   };
 }
 

@@ -252,14 +252,12 @@ function buildGoalStateFromOpeningSlots(slots: MacroSlotState[]): IntentIntakeAg
   const impression = progressSlots.find((slot) => slot.slot === "impression");
   const pattern = progressSlots.find((slot) => slot.slot === "pattern");
   const color = progressSlots.find((slot) => slot.slot === "color");
-  const capturedCount = progressSlots.filter((slot) => criticalSlots.includes(slot.slot) && slot.isBaseCaptured).length;
+  const arrangement = progressSlots.find((slot) => slot.slot === "arrangement");
+  const hasBasicConfidence = (slot: IntakeSlotProgress | undefined) =>
+    Boolean(slot && slot.topScore >= 0.38 && slot.supportingSignals.length >= 1);
   const readyForFirstGeneration =
-    Boolean(
-      impression?.isBaseCaptured &&
-      color?.isBaseCaptured &&
-      pattern?.isBaseCaptured &&
-      progressSlots.find((slot) => slot.slot === "arrangement")?.isBaseCaptured,
-    ) || (capturedCount === criticalSlots.length);
+    hasBasicConfidence(impression) &&
+    [color, pattern, arrangement].some((slot) => hasBasicConfidence(slot));
 
   return {
     slots: progressSlots,
