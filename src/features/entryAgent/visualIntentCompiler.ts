@@ -1,6 +1,7 @@
 import { buildIntentSemanticMappingFromAnalysis } from "./agentRuntime";
 import { expandExplicitMotifs } from "./explicitMotifExpansion";
 import { buildGenericImagePrompt } from "./promptAdapters";
+import { semanticRetrievalToSlotDelta } from "./retrievalSemanticBridge.ts";
 import type {
   AntiBiasState,
   ArrangementState,
@@ -30,6 +31,13 @@ function unique<T>(items: T[]) {
 
 function uniqueStrings(items: Array<string | undefined>) {
   return unique(items.filter((item): item is string => Boolean(item && item.trim())));
+}
+
+function splitCommaList(text: string) {
+  return text
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function clamp(value: number, min = 0, max = 1) {
@@ -122,6 +130,7 @@ function buildSources(input: {
   hasPoetic?: boolean;
   hasInference?: boolean;
   hasPlanner?: boolean;
+  hasRetrieval?: boolean;
 }): SignalSourceType[] {
   return unique([
     input.hasExplicitText ? "explicit_user_text" : undefined,
@@ -129,6 +138,7 @@ function buildSources(input: {
     input.hasPoetic ? "poetic_mapping" : undefined,
     input.hasInference ? "semantic_inference" : undefined,
     input.hasPlanner ? "planner_bridge" : undefined,
+    input.hasRetrieval ? "retrieval_bridge" : undefined,
   ].filter((item): item is SignalSourceType => Boolean(item)));
 }
 
@@ -551,6 +561,126 @@ function buildTraceBundle(input: VisualIntentCompilerInput): TraceBundle {
   };
 }
 
+type RetrievalBridgeOutput = ReturnType<typeof semanticRetrievalToSlotDelta>;
+
+function buildRetrievalBridgeOutputs(input: VisualIntentCompilerInput): RetrievalBridgeOutput[] {
+  return (input.retrievalBridgeInputs ?? []).map((item) => semanticRetrievalToSlotDelta(item.query, item.retrievalResults));
+}
+
+function mergePatternRenderingMode(
+  current: PatternState["renderingMode"] | undefined,
+  incoming: PatternState["renderingMode"] | undefined,
+): PatternState["renderingMode"] | undefined {
+  const order: Array<NonNullable<PatternState["renderingMode"]>> = ["suggestive", "structural", "silhouette"];
+  const currentIndex = current ? order.indexOf(current) : -1;
+  const incomingIndex = incoming ? order.indexOf(incoming) : -1;
+  return currentIndex >= incomingIndex ? current : incoming;
+}
+
+function applyRetrievalBridgeToCanonicalState(
+  state: CanonicalIntentState,
+  retrievalOutputs: RetrievalBridgeOutput[],
+): CanonicalIntentState {
+  if (retrievalOutputs.length === 0 || !state.pattern) {
+    return state;
+  }
+
+  const mergedPatternValue: PatternState = {
+    ...(state.pattern.value ?? {}),
+    structuralPattern: uniqueStrings([
+      ...(state.pattern.value.structuralPattern ?? []),
+      ...retrievalOutputs.flatMap((output) => output.semanticSpec.pattern?.structuralPattern ?? []),
+    ]),
+    atmosphericPattern: uniqueStrings([
+      ...(state.pattern.value.atmosphericPattern ?? []),
+      ...retrievalOutputs.flatMap((output) => output.semanticSpec.pattern?.atmosphericPattern ?? []),
+    ]),
+    keyElements: uniqueStrings([
+      ...(state.pattern.value.keyElements ?? []),
+      ...retrievalOutputs.flatMap((output) => output.semanticSpec.pattern?.keyElements ?? []),
+    ]),
+    motifTraces: unique(
+      [
+        ...(state.pattern.value.motifTraces ?? []),
+        ...retrievalOutputs.flatMap((output) => output.semanticSpec.pattern?.motifTraces ?? []),
+      ].map((item) => JSON.stringify(item)),
+    ).map((item) => JSON.parse(item)),
+    renderingMode: retrievalOutputs.reduce(
+      (mode, output) =>
+        mergePatternRenderingMode(
+          mode,
+          output.semanticSpec.pattern?.renderingMode as PatternState["renderingMode"] | undefined,
+        ),
+      state.pattern.value.renderingMode,
+    ),
+    motifBehavior:
+      state.pattern.value.motifBehavior === "visible"
+        ? state.pattern.value.motifBehavior
+        : retrievalOutputs.some((output) => output.semanticSpec.pattern?.motifBehavior === "suggestive")
+          ? "suggestive"
+          : state.pattern.value.motifBehavior,
+  };
+
+  const mergedConstraints = state.constraints
+    ? {
+        ...state.constraints,
+        value: {
+          ...state.constraints.value,
+          avoidMotifs: unique([
+            ...state.constraints.value.avoidMotifs,
+            ...retrievalOutputs.flatMap((output) => splitCommaList(output.negativePrompt).filter((item) => item.includes("literal"))),
+          ]),
+          avoidComposition: unique([
+            ...state.constraints.value.avoidComposition,
+            ...retrievalOutputs.flatMap((output) =>
+              splitCommaList(output.negativePrompt).filter((item) => item.includes("scene") || item.includes("illustration")),
+            ),
+          ]),
+          keepQualities: unique([
+            ...state.constraints.value.keepQualities,
+            ...retrievalOutputs.flatMap((output) => output.semanticSpec.constraints?.keepQualities ?? []),
+          ]),
+        },
+        confidence: Number(clamp(Math.max(state.constraints.confidence, 0.72)).toFixed(2)),
+        status: (state.constraints.status === "committed" ? "committed" : "stable") as SlotStatus,
+        sources: unique([...state.constraints.sources, "retrieval_bridge"]) as SignalSourceType[],
+      }
+    : state.constraints;
+
+  return {
+    ...state,
+    pattern: {
+      ...state.pattern,
+      value: mergedPatternValue,
+      confidence: Number(clamp(Math.max(state.pattern.confidence, 0.72)).toFixed(2)),
+      status: state.pattern.status === "committed" ? "committed" : "stable",
+      sources: unique([...state.pattern.sources, "retrieval_bridge"]),
+      traces: unique([
+        ...state.pattern.traces,
+        ...retrievalOutputs.flatMap((output) =>
+          output.weightedSlotDeltaBundle.supportingCandidates.map((item) => `${item.id}:${item.appliedWeight}`),
+        ),
+      ]).slice(0, 12),
+    },
+    constraints: mergedConstraints,
+    unresolvedSplits: unique(
+      [
+        ...state.unresolvedSplits.map((item) => JSON.stringify(item)),
+        ...retrievalOutputs.flatMap((output, index) =>
+          output.unresolvedQuestions.map((question, questionIndex) =>
+            JSON.stringify({
+              id: `retrieval-bridge-${index}-${questionIndex}`,
+              slot: "pattern",
+              question,
+              reason: "retrieval bridge detected unresolved motif-trace control split",
+            }),
+          ),
+        ),
+      ],
+    ).map((item) => JSON.parse(item)),
+  };
+}
+
 export function buildCanonicalIntentState(input: VisualIntentCompilerInput): CanonicalIntentState {
   const analysis = input.analysis;
   const semanticMapping = analysis.semanticMapping ?? buildIntentSemanticMappingFromAnalysis(analysis);
@@ -558,9 +688,11 @@ export function buildCanonicalIntentState(input: VisualIntentCompilerInput): Can
   const trace = buildTraceBundle(input);
   const constraints = buildConstraintState(input);
   const antiBias = buildAntiBiasState(input, constraints);
+  const retrievalOutputs = buildRetrievalBridgeOutputs(input);
   const hasPoetic = (trace.poeticHits.length ?? 0) > 0;
   const hasOptions = (input.selectedOptions?.length ?? 0) > 0;
   const hasText = (trace.freeTextInputs.length ?? 0) > 0;
+  const hasRetrieval = retrievalOutputs.length > 0;
 
   const atmosphere = buildAtmosphereState(analysis);
   const color = buildColorState(analysis);
@@ -570,77 +702,138 @@ export function buildCanonicalIntentState(input: VisualIntentCompilerInput): Can
   const arrangement = buildArrangementState(analysis);
   const materiality = buildMaterialityState(analysis);
 
-  return {
+  return applyRetrievalBridgeToCanonicalState({
     atmosphere: createSourcedValue({
       value: atmosphere,
       confidence: Math.max(getSlotScore(analysis, "impression"), semanticMapping.confidenceSummary.macroSlotCoverage.presence),
       status: inferSlotStatus(getSlotScore(analysis, "impression"), getSlotPhase(analysis, "impression")),
-      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true }),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true, hasRetrieval }),
       traces: [...trace.poeticHits, ...trace.latestResolutionReasons],
     }),
     color: createSourcedValue({
       value: color,
       confidence: getSlotScore(analysis, "color"),
       status: inferSlotStatus(getSlotScore(analysis, "color"), getSlotPhase(analysis, "color")),
-      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true }),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true, hasRetrieval }),
       traces: [...trace.poeticHits, ...(semanticMapping.slotHypotheses.color?.evidence ?? [])],
     }),
     impression: createSourcedValue({
       value: impression,
       confidence: getSlotScore(analysis, "impression"),
       status: inferSlotStatus(getSlotScore(analysis, "impression"), getSlotPhase(analysis, "impression")),
-      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true }),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true, hasRetrieval }),
       traces: [...trace.latestResolutionReasons, ...(semanticMapping.slotHypotheses.impression?.topDirections.flatMap((item) => item.evidence) ?? [])],
     }),
     pattern: createSourcedValue({
       value: pattern,
       confidence: getSlotScore(analysis, "pattern"),
       status: inferSlotStatus(getSlotScore(analysis, "pattern"), getSlotPhase(analysis, "pattern")),
-      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true }),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasPlanner: true, hasRetrieval }),
       traces: [...trace.poeticHits, ...(semanticMapping.slotHypotheses.patternIntent?.evidence ?? [])],
     }),
     presence: createSourcedValue({
       value: presence,
       confidence: semanticMapping.confidenceSummary.macroSlotCoverage.presence,
       status: inferSlotStatus(semanticMapping.confidenceSummary.macroSlotCoverage.presence),
-      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true }),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasPoetic, hasInference: true, hasRetrieval }),
       traces: [...trace.poeticHits, ...(semanticMapping.slotHypotheses.presence?.evidence ?? [])],
     }),
     arrangement: createSourcedValue({
       value: arrangement,
       confidence: getSlotScore(analysis, "arrangement"),
       status: inferSlotStatus(getSlotScore(analysis, "arrangement"), getSlotPhase(analysis, "arrangement")),
-      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasInference: true, hasPlanner: true }),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasInference: true, hasPlanner: true, hasRetrieval }),
       traces: semanticMapping.slotHypotheses.arrangement?.evidence ?? [],
     }),
     materiality: createSourcedValue({
       value: materiality,
       confidence: materiality ? 0.44 : 0,
       status: materiality ? "tentative" : "missing",
-      sources: buildSources({ hasExplicitText: hasText, hasPoetic, hasInference: true }),
+      sources: buildSources({ hasExplicitText: hasText, hasPoetic, hasInference: true, hasRetrieval }),
       traces: [...trace.poeticHits],
     }),
     constraints: createSourcedValue({
       value: constraints,
       confidence: constraints.avoidMotifs.length + constraints.avoidStyles.length + constraints.avoidPalette.length > 0 ? 0.78 : 0.42,
       status: constraints.avoidMotifs.length + constraints.avoidStyles.length + constraints.avoidPalette.length > 0 ? "stable" : "tentative",
-      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasInference: true }),
+      sources: buildSources({ hasExplicitText: hasText, hasOptions, hasInference: true, hasRetrieval }),
       traces: trace.freeTextInputs,
     }),
     antiBias: createSourcedValue({
       value: antiBias,
       confidence: 0.72,
       status: "stable",
-      sources: buildSources({ hasPoetic, hasInference: true }),
+      sources: buildSources({ hasPoetic, hasInference: true, hasRetrieval }),
       traces: [...trace.poeticHits, ...antiBias.antiLiteralization],
     }),
     unresolvedSplits: buildUnresolvedSplits(analysis),
     readiness,
-  };
+  }, retrievalOutputs);
 }
 
-function buildSemanticSpec(state: CanonicalIntentState): GenerationSemanticSpec {
-  return {
+function mergeSemanticSpecs(baseSpec: GenerationSemanticSpec, retrievalOutputs: RetrievalBridgeOutput[]): GenerationSemanticSpec {
+  if (retrievalOutputs.length === 0) {
+    return baseSpec;
+  }
+
+  return retrievalOutputs.reduce<GenerationSemanticSpec>((merged, output) => ({
+    ...merged,
+    baseMood: unique([...(merged.baseMood ?? []), ...(output.semanticSpec.baseMood ?? [])]),
+    palette: {
+      temperature: output.semanticSpec.palette?.temperature ?? merged.palette?.temperature,
+      saturation: output.semanticSpec.palette?.saturation ?? merged.palette?.saturation,
+      brightness: output.semanticSpec.palette?.brightness ?? merged.palette?.brightness,
+      contrast: output.semanticSpec.palette?.contrast ?? merged.palette?.contrast,
+      haze: output.semanticSpec.palette?.haze ?? merged.palette?.haze,
+      base: output.semanticSpec.palette?.base ?? merged.palette?.base ?? null,
+      accent: output.semanticSpec.palette?.accent ?? merged.palette?.accent ?? null,
+      relation: output.semanticSpec.palette?.relation ?? merged.palette?.relation,
+    },
+    atmosphere: unique([...(merged.atmosphere ?? []), ...(output.semanticSpec.atmosphere ?? [])]),
+    pattern: {
+      abstraction: output.semanticSpec.pattern?.abstraction ?? merged.pattern?.abstraction,
+      density: output.semanticSpec.pattern?.density ?? merged.pattern?.density,
+      scale: output.semanticSpec.pattern?.scale ?? merged.pattern?.scale,
+      renderingMode: output.semanticSpec.pattern?.renderingMode ?? merged.pattern?.renderingMode,
+      coreExplicitMotifs: unique([...(merged.pattern?.coreExplicitMotifs ?? []), ...(output.semanticSpec.pattern?.coreExplicitMotifs ?? [])]),
+      explicitMotifs: unique([...(merged.pattern?.explicitMotifs ?? []), ...(output.semanticSpec.pattern?.explicitMotifs ?? [])]),
+      structuralPattern: unique([...(merged.pattern?.structuralPattern ?? []), ...(output.semanticSpec.pattern?.structuralPattern ?? [])]),
+      atmosphericPattern: unique([...(merged.pattern?.atmosphericPattern ?? []), ...(output.semanticSpec.pattern?.atmosphericPattern ?? [])]),
+      motion: output.semanticSpec.pattern?.motion ?? merged.pattern?.motion,
+      edgeDefinition: output.semanticSpec.pattern?.edgeDefinition ?? merged.pattern?.edgeDefinition,
+      motifBehavior: output.semanticSpec.pattern?.motifBehavior ?? merged.pattern?.motifBehavior,
+      keyElements: unique([...(merged.pattern?.keyElements ?? []), ...(output.semanticSpec.pattern?.keyElements ?? [])]),
+      temporaryMotifs: unique([...(merged.pattern?.temporaryMotifs ?? []), ...(output.semanticSpec.pattern?.temporaryMotifs ?? [])]),
+      motifTraces: unique(
+        [...(merged.pattern?.motifTraces ?? []), ...(output.semanticSpec.pattern?.motifTraces ?? [])].map((item) => JSON.stringify(item)),
+      ).map((item) => JSON.parse(item)),
+    },
+    presence: {
+      blending: output.semanticSpec.presence?.blending ?? merged.presence?.blending,
+      focalness: output.semanticSpec.presence?.focalness ?? merged.presence?.focalness,
+      visualWeight: output.semanticSpec.presence?.visualWeight ?? merged.presence?.visualWeight,
+      behavior: output.semanticSpec.presence?.behavior ?? merged.presence?.behavior,
+    },
+    arrangement: {
+      spread: output.semanticSpec.arrangement?.spread ?? merged.arrangement?.spread,
+      directionalFlow: output.semanticSpec.arrangement?.directionalFlow ?? merged.arrangement?.directionalFlow,
+      rhythm: output.semanticSpec.arrangement?.rhythm ?? merged.arrangement?.rhythm,
+      symmetry: merged.arrangement?.symmetry,
+      orderliness: output.semanticSpec.arrangement?.orderliness ?? merged.arrangement?.orderliness,
+    },
+    constraints: {
+      avoidMotifs: unique([...(merged.constraints?.avoidMotifs ?? []), ...(output.semanticSpec.constraints?.avoidMotifs ?? [])]),
+      avoidStyles: unique([...(merged.constraints?.avoidStyles ?? []), ...(output.semanticSpec.constraints?.avoidStyles ?? [])]),
+      avoidPalette: unique([...(merged.constraints?.avoidPalette ?? []), ...(output.semanticSpec.constraints?.avoidPalette ?? [])]),
+      avoidComposition: unique([...(merged.constraints?.avoidComposition ?? []), ...(output.semanticSpec.constraints?.avoidComposition ?? [])]),
+      keepQualities: unique([...(merged.constraints?.keepQualities ?? []), ...(output.semanticSpec.constraints?.keepQualities ?? [])]),
+    },
+    materiality: merged.materiality,
+  }), baseSpec);
+}
+
+function buildSemanticSpec(state: CanonicalIntentState, retrievalOutputs: RetrievalBridgeOutput[] = []): GenerationSemanticSpec {
+  const baseSpec: GenerationSemanticSpec = {
     baseMood: unique([
       ...(state.impression?.value.primary ?? []),
       ...(state.impression?.value.tension ?? []),
@@ -664,6 +857,7 @@ function buildSemanticSpec(state: CanonicalIntentState): GenerationSemanticSpec 
       abstraction: state.pattern?.value.abstraction,
       density: state.pattern?.value.density,
       scale: state.pattern?.value.scale,
+      renderingMode: state.pattern?.value.renderingMode,
       coreExplicitMotifs: state.pattern?.value.coreExplicitMotifs,
       explicitMotifs: state.pattern?.value.explicitMotifs,
       structuralPattern: state.pattern?.value.structuralPattern,
@@ -673,6 +867,7 @@ function buildSemanticSpec(state: CanonicalIntentState): GenerationSemanticSpec 
       motifBehavior: state.pattern?.value.motifBehavior,
       keyElements: state.pattern?.value.keyElements,
       temporaryMotifs: state.pattern?.value.temporaryMotifs,
+      motifTraces: state.pattern?.value.motifTraces,
     },
     presence: {
       blending: state.presence?.value.blending,
@@ -690,9 +885,11 @@ function buildSemanticSpec(state: CanonicalIntentState): GenerationSemanticSpec 
     materiality: state.materiality?.value,
     constraints: state.constraints?.value,
   };
+
+  return mergeSemanticSpecs(baseSpec, retrievalOutputs);
 }
 
-function buildNegativePrompt(constraints: ConstraintState, antiBias: AntiBiasState) {
+function buildNegativePrompt(constraints: ConstraintState, antiBias: AntiBiasState, bridgeNegatives: string[] = []) {
   return unique([
     ...constraints.avoidMotifs,
     ...constraints.avoidStyles,
@@ -702,6 +899,7 @@ function buildNegativePrompt(constraints: ConstraintState, antiBias: AntiBiasSta
     ...antiBias.antiDecorative,
     ...antiBias.antiLuxury,
     ...antiBias.antiScene,
+    ...bridgeNegatives.flatMap(splitCommaList),
   ]).join(", ");
 }
 
@@ -779,14 +977,19 @@ function buildConfidenceState(state: CanonicalIntentState, analysis: EntryAgentR
 
 export function buildVisualIntentCompiler(input: VisualIntentCompilerInput): CompiledVisualIntentPackage {
   const canonicalState = buildCanonicalIntentState(input);
-  const semanticSpec = buildSemanticSpec(canonicalState);
-  const unresolvedQuestions = canonicalState.unresolvedSplits.map((item) => item.question);
+  const retrievalOutputs = buildRetrievalBridgeOutputs(input);
+  const semanticSpec = buildSemanticSpec(canonicalState, retrievalOutputs);
+  const unresolvedQuestions = unique([
+    ...canonicalState.unresolvedSplits.map((item) => item.question),
+    ...retrievalOutputs.flatMap((output) => output.unresolvedQuestions),
+  ]);
   const developerBrief = buildDeveloperBrief(semanticSpec, unresolvedQuestions);
   const summary = buildSummary(semanticSpec);
   const generationPrompt = buildGenericImagePrompt(semanticSpec);
   const negativePrompt = buildNegativePrompt(
     canonicalState.constraints?.value ?? { avoidMotifs: [], avoidStyles: [], avoidPalette: [], avoidComposition: [], keepQualities: [] },
     canonicalState.antiBias?.value ?? { antiLiteralization: [], antiDecorative: [], antiLuxury: [], antiScene: [] },
+    retrievalOutputs.map((output) => output.negativePrompt),
   );
 
   return {

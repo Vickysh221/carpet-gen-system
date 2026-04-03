@@ -6,7 +6,8 @@ export type SignalSourceType =
   | "option_click"
   | "poetic_mapping"
   | "semantic_inference"
-  | "planner_bridge";
+  | "planner_bridge"
+  | "retrieval_bridge";
 
 export interface SourcedValue<T> {
   value: T;
@@ -56,12 +57,24 @@ export interface PatternState {
   motion?: "still" | "gentle-flow" | "directional-flow" | "pulsed";
   edgeDefinition?: "blurred" | "soft" | "mixed" | "clear";
   motifBehavior?: "implicit" | "suggestive" | "visible";
+  renderingMode?: "suggestive" | "silhouette" | "structural";
   coreExplicitMotifs?: string[];
   explicitMotifs?: string[];
   structuralPattern?: string[];
   atmosphericPattern?: string[];
   keyElements?: string[];
   temporaryMotifs?: TemporaryMotifTemplate[];
+  motifTraces?: MotifTraceState[];
+}
+
+export interface MotifTraceState {
+  sourceSubject: string;
+  traceType: "boundary-dissolution" | "filtered-glow" | "light-trace" | "wave-ring" | "silhouette-accent" | "organic-fragment";
+  structuralFeatures: string[];
+  visibility: number;
+  literalRisk: number;
+  renderingMode: "suggestive" | "silhouette" | "structural";
+  keepObjectIdentity: boolean;
 }
 
 export interface TemporaryMotifTemplate {
@@ -157,6 +170,7 @@ export interface GenerationSemanticSpec {
     abstraction?: string;
     density?: string;
     scale?: string;
+    renderingMode?: string;
     coreExplicitMotifs?: string[];
     explicitMotifs?: string[];
     structuralPattern?: string[];
@@ -166,6 +180,7 @@ export interface GenerationSemanticSpec {
     motifBehavior?: string;
     keyElements?: string[];
     temporaryMotifs?: TemporaryMotifTemplate[];
+    motifTraces?: MotifTraceState[];
   };
   presence?: {
     blending?: string;
@@ -258,4 +273,13 @@ export interface VisualIntentCompilerInput {
   freeTextInputs?: string[];
   selectedOptions?: Array<{ questionId: string; optionId: string; label: string }>;
   turnHistory?: Array<{ turnIndex: number; text: string; source: "text" | "opening-selection" }>;
+  retrievalBridgeInputs?: Array<{
+    query: string;
+    retrievalResults: Array<{
+      id: string;
+      text: string;
+      score: number;
+      source: "poeticMappings" | "openingOptions" | "explicitMotifs";
+    }>;
+  }>;
 }

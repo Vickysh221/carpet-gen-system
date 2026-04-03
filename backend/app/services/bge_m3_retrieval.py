@@ -17,6 +17,11 @@ _MODEL_SOURCE: str | None = None
 _MODEL_SOURCE_TYPE: str | None = None
 
 
+def _get_default_local_model_root() -> Path:
+    hub_root = Path(os.getenv("HF_HUB_CACHE", "")).expanduser() if os.getenv("HF_HUB_CACHE") else Path.home() / ".cache" / "huggingface" / "hub"
+    return hub_root / "models--BAAI--bge-m3"
+
+
 def _resolve_local_model_path(model_path: str | None) -> Path | None:
     if not model_path:
         return None
@@ -50,6 +55,10 @@ def loadBgeM3Model(model_path: str | None = None, model_name: str | None = None)
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
     configured_model_path = model_path or os.getenv("BGE_M3_MODEL_PATH")
+    if not configured_model_path:
+      default_local_root = _get_default_local_model_root()
+      if default_local_root.exists():
+          configured_model_path = str(default_local_root)
     configured_model_name = model_name or os.getenv("BGE_M3_MODEL_NAME") or DEFAULT_BGE_M3_MODEL_NAME
 
     resolved_local_path = _resolve_local_model_path(configured_model_path)

@@ -147,9 +147,15 @@ function buildMidjourneyPatternBlock(spec: GenerationSemanticSpec) {
 
   return compact([
     spec.pattern.abstraction ? `${spec.pattern.abstraction} pattern language` : undefined,
+    spec.pattern.renderingMode ? sanitizeMidjourneyToken(`${spec.pattern.renderingMode} rendering`) : undefined,
     joinList(sanitizeMidjourneyList(spec.pattern.explicitMotifs)),
     joinList(sanitizeMidjourneyList(spec.pattern.structuralPattern)),
     joinList(sanitizeMidjourneyList(spec.pattern.atmosphericPattern)),
+    joinList(
+      sanitizeMidjourneyList(
+        spec.pattern.motifTraces?.map((trace) => `${trace.sourceSubject} ${trace.traceType} ${trace.renderingMode}`),
+      ),
+    ),
     sanitizeMidjourneyToken(mapPatternMotion(spec.pattern.motion)),
     spec.pattern.edgeDefinition ? sanitizeMidjourneyToken(`${spec.pattern.edgeDefinition} edges`) : undefined,
     spec.pattern.motifBehavior ? sanitizeMidjourneyToken(`${spec.pattern.motifBehavior} motif visibility`) : undefined,
@@ -206,8 +212,12 @@ export function buildPatternFirstPrompt(spec: GenerationSemanticSpec) {
     spec.pattern
       ? compact([
           spec.pattern.abstraction && `${spec.pattern.abstraction} pattern language`,
+          spec.pattern.renderingMode && `${spec.pattern.renderingMode} rendering`,
           joinList(spec.pattern.structuralPattern),
           joinList(spec.pattern.atmosphericPattern),
+          spec.pattern.motifTraces?.length
+            ? joinList(spec.pattern.motifTraces.map((trace) => `${trace.sourceSubject} as ${trace.traceType}`))
+            : undefined,
           spec.pattern.motion && `${spec.pattern.motion} movement`,
           spec.pattern.edgeDefinition && `${spec.pattern.edgeDefinition} edges`,
           spec.pattern.motifBehavior && `${spec.pattern.motifBehavior} motif visibility`,

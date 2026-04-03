@@ -180,6 +180,19 @@ export type PrototypeRetrievalHit = {
   explainText: string;
 };
 
+type ApiSemanticRetrievalResponse = {
+  total: number;
+  results: SemanticRetrievalMatchResult[];
+};
+
+export type SemanticRetrievalCandidate = { id: string; text: string; source: string };
+export type SemanticRetrievalMatchResult = {
+  id: string;
+  text: string;
+  score: number;
+  source: "poeticMappings" | "openingOptions" | "explicitMotifs";
+};
+
 type ApiLlmFallbackCandidate = {
   candidate_prototypes: string[];
   candidate_fields: string[];
@@ -342,6 +355,18 @@ export async function fetchPrototypeRetrieval(text: string, topK = 5): Promise<P
     similarityScore: item.similarity_score,
     explainText: item.explain_text,
   }));
+}
+
+export async function fetchSemanticRetrieval(
+  query: string,
+  candidates: SemanticRetrievalCandidate[],
+  topK = 5,
+): Promise<SemanticRetrievalMatchResult[]> {
+  const response = await apiRequest<ApiSemanticRetrievalResponse>("/semantic-retrieval/search", {
+    method: "POST",
+    body: JSON.stringify({ query, candidates, top_k: topK }),
+  });
+  return response.results;
 }
 
 export async function fetchLlmFallbackCandidates(payload: {

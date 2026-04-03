@@ -204,6 +204,30 @@ class PrototypeRetrievalResponse(BaseModel):
     items: List[PrototypeRetrievalEntryResponse]
 
 
+class SemanticRetrievalCandidateInput(BaseModel):
+    id: str
+    text: str
+    source: str
+
+
+class SemanticRetrievalRequest(BaseModel):
+    query: str
+    candidates: List[SemanticRetrievalCandidateInput]
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+class SemanticRetrievalMatchItem(BaseModel):
+    id: str
+    text: str
+    score: float
+    source: str
+
+
+class SemanticRetrievalResponse(BaseModel):
+    total: int
+    results: List[SemanticRetrievalMatchItem]
+
+
 EntryAgentField = Literal[
     "spaceContext",
     "overallImpression",

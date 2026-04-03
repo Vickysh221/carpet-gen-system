@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Play, Heart, X, Trophy, ChevronDown, ChevronUp } from "lucide-react";
 
 import { collectLikedAnchors, createRandomBaseState, generateRoundVariants, getPrimarySlot, getRoundMode, reduceRound } from "./mockEngine";
@@ -23,12 +23,19 @@ import {
   type IntakeMacroSlot,
   type OpeningSelectionSignal,
   type TextIntakeSignal,
+  type GenerationSemanticSpec,
   type VisualIntentTestBundle,
   updateAgentStateFromSignal,
 } from "@/features/entryAgent";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
+import { fetchSemanticRetrieval, type SemanticRetrievalMatchResult } from "@/lib/api";
+import { semanticRetrievalToSlotDelta } from "@/features/entryAgent/retrievalSemanticBridge";
+import { buildSemanticRetrievalCandidates } from "@/features/entryAgent/semanticRetrieval";
 
 const PROBING_ROUND_LIMIT = 3;
+const SEMANTIC_RETRIEVAL_ENABLED =
+  import.meta.env.VITE_ENABLE_SEMANTIC_RETRIEVAL !== "false" &&
+  import.meta.env.VITE_ENABLE_PROTOTYPE_RETRIEVAL !== "false";
 
 interface LikedHistoryCard {
   id: string;
@@ -40,6 +47,114 @@ interface LikedHistoryCard {
 interface SelectedRefInspectState {
   label: string;
   asset: AnnotatedAssetRecord & { distance: number };
+}
+
+interface RetrievalExecutionDebugInfo {
+  retrievalEnabled: boolean;
+  compilerSupportsRetrievalBridge: boolean;
+  retrievalInputsProvided: boolean;
+  retrievalQueryCount: number;
+  retrievalResultCount: number;
+  actualInvocationDetected: boolean;
+  bridgeProducedSlotDelta: boolean;
+  semanticSpecCarriesRetrievalTrace: boolean;
+  motifTraceCount: number;
+  renderingMode?: string;
+  query?: string;
+  keyElements: string[];
+  topResults: SemanticRetrievalMatchResult[];
+  motifTraceSubjects: string[];
+  effectiveSignals: string[];
+  bridgeOutput?: ReturnType<typeof semanticRetrievalToSlotDelta>;
+  mergedSemanticSpec?: GenerationSemanticSpec;
+  mergedNegativePrompt?: string;
+  mergedUnresolvedQuestions: string[];
+  loading: boolean;
+  error?: string;
+  status: "not-called" | "bridge-only" | "effective";
+  reason: string;
+}
+
+function stringifyDebugJson(value: unknown) {
+  return JSON.stringify(value, null, 2);
+}
+
+function hasMeaningfulRetrievalBridgeOutput(bridgeOutput: ReturnType<typeof semanticRetrievalToSlotDelta> | null) {
+  if (!bridgeOutput) {
+    return false;
+  }
+
+  const semanticSpec = bridgeOutput.semanticSpec;
+  const weightedBundle = bridgeOutput.weightedSlotDeltaBundle;
+  const hasWeightedDelta = [
+    weightedBundle.color,
+    weightedBundle.atmosphere,
+    weightedBundle.pattern,
+    weightedBundle.presence,
+    weightedBundle.arrangement,
+  ].some((record) => Object.values(record).some((value) => Math.abs(value) > 0.001));
+
+  return Boolean(
+    bridgeOutput.weightedSlotDeltaBundle.supportingCandidates.length > 0 ||
+      hasWeightedDelta ||
+      (semanticSpec.baseMood?.length ?? 0) > 0 ||
+      (semanticSpec.atmosphere?.length ?? 0) > 0 ||
+      semanticSpec.palette?.base ||
+      semanticSpec.palette?.accent ||
+      semanticSpec.pattern?.renderingMode ||
+      (semanticSpec.pattern?.atmosphericPattern?.length ?? 0) > 0 ||
+      (semanticSpec.pattern?.structuralPattern?.length ?? 0) > 0 ||
+      (semanticSpec.pattern?.keyElements?.length ?? 0) > 0 ||
+      (semanticSpec.pattern?.motifTraces?.length ?? 0) > 0 ||
+      semanticSpec.pattern?.motifBehavior ||
+      semanticSpec.presence?.behavior ||
+      bridgeOutput.unresolvedQuestions.length > 0,
+  );
+}
+
+function collectRetrievalEffectSignals(
+  previous: GenerationSemanticSpec | undefined,
+  current: GenerationSemanticSpec | undefined,
+  previousNegativePrompt: string | undefined,
+  currentNegativePrompt: string | undefined,
+  previousUnresolvedQuestions: string[],
+  currentUnresolvedQuestions: string[],
+) {
+  if (!previous || !current) {
+    return [];
+  }
+
+  const signals: string[] = [];
+
+  if ((current.pattern?.motifTraces?.length ?? 0) > (previous.pattern?.motifTraces?.length ?? 0)) {
+    signals.push("motif traces changed");
+  }
+  if (current.pattern?.renderingMode !== previous.pattern?.renderingMode) {
+    signals.push(`renderingMode -> ${current.pattern?.renderingMode ?? "none"}`);
+  }
+  if (stringifyDebugJson(current.pattern?.atmosphericPattern ?? []) !== stringifyDebugJson(previous.pattern?.atmosphericPattern ?? [])) {
+    signals.push("pattern.atmosphericPattern changed");
+  }
+  if (stringifyDebugJson(current.atmosphere ?? []) !== stringifyDebugJson(previous.atmosphere ?? [])) {
+    signals.push("atmosphere changed");
+  }
+  if (stringifyDebugJson(current.palette ?? {}) !== stringifyDebugJson(previous.palette ?? {})) {
+    signals.push("color palette changed");
+  }
+  if (current.pattern?.motifBehavior !== previous.pattern?.motifBehavior) {
+    signals.push("pattern behavior changed");
+  }
+  if (stringifyDebugJson(current.presence ?? {}) !== stringifyDebugJson(previous.presence ?? {})) {
+    signals.push("presence changed");
+  }
+  if ((currentNegativePrompt ?? "") !== (previousNegativePrompt ?? "")) {
+    signals.push("negativePrompt changed");
+  }
+  if (stringifyDebugJson(currentUnresolvedQuestions) !== stringifyDebugJson(previousUnresolvedQuestions)) {
+    signals.push("unresolvedQuestions changed");
+  }
+
+  return signals;
 }
 
 function formatPercent(value: number) {
@@ -480,6 +595,160 @@ function VisualIntentBundleCard({ bundle, previousBundle }: { bundle: VisualInte
   );
 }
 
+function RetrievalExecutionCard({ debug }: { debug: RetrievalExecutionDebugInfo }) {
+  const statusTone =
+    debug.status === "effective"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : debug.status === "bridge-only"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : "border-rose-200 bg-rose-50 text-rose-800";
+
+  const statusLabel =
+    debug.status === "effective"
+      ? "已观察到真实影响"
+      : debug.status === "bridge-only"
+        ? "桥接存在但未确认模型调用"
+        : "当前未真实调用";
+
+  return (
+    <div className="fixed bottom-4 right-4 z-40 w-[min(720px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-stone-200 bg-white/95 p-4 shadow-2xl backdrop-blur">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Retrieval Execution</div>
+          <div className="mt-1 text-sm font-semibold text-stone-800">BAAI/bge-m3 实际调用观测</div>
+        </div>
+        <div className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusTone}`}>{statusLabel}</div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Retrieval Enabled</div>
+          <div className="mt-1 text-sm font-medium text-stone-800">{debug.retrievalEnabled ? "yes" : "no"}</div>
+        </div>
+        <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Compiler Support</div>
+          <div className="mt-1 text-sm font-medium text-stone-800">{debug.compilerSupportsRetrievalBridge ? "yes" : "no"}</div>
+        </div>
+        <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Inputs Passed</div>
+          <div className="mt-1 text-sm font-medium text-stone-800">
+            {debug.retrievalInputsProvided ? `${debug.retrievalQueryCount} query` : "none"}
+          </div>
+        </div>
+        <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">TopK Results</div>
+          <div className="mt-1 text-sm font-medium text-stone-800">{debug.retrievalResultCount}</div>
+        </div>
+        <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Motif Traces</div>
+          <div className="mt-1 text-sm font-medium text-stone-800">{debug.motifTraceCount}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl border border-stone-200 bg-stone-50 px-3 py-3">
+        <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Query + Runtime</div>
+        <div className="mt-1 text-sm leading-6 text-stone-700">
+          <div>query: <span className="font-medium text-stone-900">{debug.query ?? "n/a"}</span></div>
+          <div>loading: <span className="font-medium text-stone-900">{debug.loading ? "yes" : "no"}</span></div>
+          <div>error: <span className="font-medium text-stone-900">{debug.error ?? "none"}</span></div>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 px-3 py-3">
+        <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Conclusion</div>
+        <div className="mt-1 text-sm leading-6 text-stone-700">{debug.reason}</div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-stone-200 bg-white px-3 py-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Compiler Consumption</div>
+          <div className="mt-2 text-sm text-stone-700">
+            bridge produced slot delta: <span className="font-semibold text-stone-900">{debug.bridgeProducedSlotDelta ? "yes" : "no"}</span>
+          </div>
+          <div className="mt-1 text-sm text-stone-700">
+            semantic trace in spec: <span className="font-semibold text-stone-900">{debug.semanticSpecCarriesRetrievalTrace ? "yes" : "no"}</span>
+          </div>
+          <div className="mt-1 text-sm text-stone-700">
+            rendering mode: <span className="font-semibold text-stone-900">{debug.renderingMode ?? "n/a"}</span>
+          </div>
+        </div>
+        <div className="rounded-xl border border-stone-200 bg-white px-3 py-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Key Elements</div>
+          <div className="mt-2 text-sm text-stone-700">
+            {debug.keyElements.length > 0 ? debug.keyElements.join(", ") : "none"}
+          </div>
+          <div className="mt-2 text-sm text-stone-700">
+            motif trace subjects: <span className="font-semibold text-stone-900">{debug.motifTraceSubjects.length > 0 ? debug.motifTraceSubjects.join(", ") : "none"}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-stone-200 bg-white px-3 py-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">TopK Results</div>
+          <div className="mt-2 space-y-2">
+            {debug.topResults.length === 0 ? (
+              <div className="text-sm text-stone-600">none</div>
+            ) : (
+              debug.topResults.map((item, index) => (
+                <div key={`${item.id}-${index}`} className="rounded-lg bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-700">
+                  <div className="font-semibold text-stone-800">{index + 1}. {item.id}</div>
+                  <div>source: {item.source} · score: {item.score.toFixed(4)}</div>
+                  <div className="text-stone-500">{item.text}</div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="rounded-xl border border-stone-200 bg-white px-3 py-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">Expected Acceptance</div>
+          <div className="mt-2 text-sm leading-6 text-stone-700">
+            <div>inputs passed: <span className="font-semibold text-stone-900">{debug.retrievalInputsProvided ? "yes" : "no"}</span></div>
+            <div>topK results &gt; 0: <span className="font-semibold text-stone-900">{debug.retrievalResultCount > 0 ? "yes" : "no"}</span></div>
+            <div>bridge produced slot delta: <span className="font-semibold text-stone-900">{debug.bridgeProducedSlotDelta ? "yes" : "no"}</span></div>
+            <div>motif traces &gt; 0: <span className="font-semibold text-stone-900">{debug.motifTraceCount > 0 ? "yes" : "no"}</span></div>
+            <div>semantic trace in spec: <span className="font-semibold text-stone-900">{debug.semanticSpecCarriesRetrievalTrace ? "yes" : "no"}</span></div>
+            <div>rendering mode: <span className="font-semibold text-stone-900">{debug.renderingMode ?? "n/a"}</span></div>
+            <div>effective signals: <span className="font-semibold text-stone-900">{debug.effectiveSignals.length > 0 ? debug.effectiveSignals.join(", ") : "none"}</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 xl:grid-cols-3">
+        <div className="rounded-xl border border-stone-200 bg-white px-3 py-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">1. Semantic Retrieval TopK</div>
+          <pre className="mt-2 overflow-x-auto rounded-lg bg-stone-50 p-3 text-[11px] leading-5 text-stone-700">
+            {stringifyDebugJson(debug.topResults)}
+          </pre>
+        </div>
+        <div className="rounded-xl border border-stone-200 bg-white px-3 py-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">2. semanticRetrievalToSlotDelta Raw Output</div>
+          <pre className="mt-2 overflow-x-auto rounded-lg bg-stone-50 p-3 text-[11px] leading-5 text-stone-700">
+            {stringifyDebugJson(debug.bridgeOutput ?? null)}
+          </pre>
+        </div>
+        <div className="rounded-xl border border-stone-200 bg-white px-3 py-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-stone-500">3. Merged semanticSpec</div>
+          <pre className="mt-2 overflow-x-auto rounded-lg bg-stone-50 p-3 text-[11px] leading-5 text-stone-700">
+            {stringifyDebugJson({
+              semanticSpec: debug.mergedSemanticSpec ?? null,
+              negativePrompt: debug.mergedNegativePrompt ?? "",
+              unresolvedQuestions: debug.mergedUnresolvedQuestions,
+            })}
+          </pre>
+        </div>
+      </div>
+
+      <div className="mt-4 text-xs leading-5 text-stone-500">
+        判断标准：
+        <span className="ml-1">
+          retrieval 生效不再只看 `motifTraces`。只要 merge 后出现 `pattern.atmosphericPattern`、`renderingMode=suggestive`、`atmosphere/color/pattern behavior/presence`、`negativePrompt`、`unresolvedQuestions` 任一 retrieval 相关变化，也算生效。
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function ConversationStateInspectCard({ summary, expanded, onToggle }: { summary: ConversationStateLogSummary; expanded: boolean; onToggle: () => void }) {
   const compactLines = [
     `Turn ${summary.turnCount} · ${summary.readyToGenerate ? "ready to generate" : "still stabilizing"}`,
@@ -767,6 +1036,12 @@ export function SimulatorPage() {
   const [isIntentAnalyzing, setIsIntentAnalyzing] = useState(false);
   const [dismissedConfirmationSlots, setDismissedConfirmationSlots] = useState<IntakeMacroSlot[]>([]);
   const [isImmersiveQaOpen, setIsImmersiveQaOpen] = useState(true);
+  const [semanticRetrievalState, setSemanticRetrievalState] = useState<{
+    query: string;
+    results: SemanticRetrievalMatchResult[];
+  } | null>(null);
+  const [semanticRetrievalLoading, setSemanticRetrievalLoading] = useState(false);
+  const [semanticRetrievalError, setSemanticRetrievalError] = useState<string | null>(null);
 
   const feedbackRecords = useMemo<FeedbackRecord[]>(() => Object.entries(feedbackMap).map(([variantId, value]) => ({ variantId, value })), [feedbackMap]);
   const roundMode = getRoundMode(round);
@@ -786,6 +1061,38 @@ export function SimulatorPage() {
     ? openingFamiliesForFirstTurns[currentOpeningStep]
     : undefined;
   const authoritativeAgentState = currentAgentState ?? intentSnapshot?.conversationState.agentState ?? intentSnapshot?.analysis.agentState ?? null;
+
+  const semanticRetrievalQuery = intentSnapshot?.text ?? authoritativeAgentState?.cumulativeText ?? null;
+
+  useEffect(() => {
+    if (!SEMANTIC_RETRIEVAL_ENABLED || !semanticRetrievalQuery?.trim()) {
+      setSemanticRetrievalState(null);
+      setSemanticRetrievalLoading(false);
+      setSemanticRetrievalError(null);
+      return;
+    }
+    let cancelled = false;
+    setSemanticRetrievalLoading(true);
+    setSemanticRetrievalError(null);
+    const candidates = buildSemanticRetrievalCandidates();
+    fetchSemanticRetrieval(semanticRetrievalQuery, candidates, 5)
+      .then((results) => {
+        if (!cancelled) {
+          setSemanticRetrievalState({ query: semanticRetrievalQuery, results });
+          setSemanticRetrievalLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSemanticRetrievalState(null);
+          setSemanticRetrievalLoading(false);
+          setSemanticRetrievalError(err instanceof Error ? err.message : String(err));
+        }
+        console.warn("[SimulatorPage] semantic retrieval failed:", err);
+      });
+    return () => { cancelled = true; };
+  }, [semanticRetrievalQuery]);
+
   const openingSelectionPreview = buildOpeningSelectionPreview(authoritativeAgentState, activeOpeningFamily);
   const composerValue = entryText;
   const referenceAssets = useMemo(() => getReferenceAssets(assetSourceMode), [assetSourceMode]);
@@ -816,7 +1123,7 @@ export function SimulatorPage() {
     });
   }, [intentSnapshot, initializationExplainability]);
 
-  const visualIntentBundle = useMemo(() => {
+  const visualIntentCompilerInput = useMemo(() => {
     const baseAnalysis =
       intentSnapshot?.analysis ??
       (authoritativeAgentState ? buildDerivedEntryAnalysisFromAgentState(authoritativeAgentState) : null);
@@ -825,7 +1132,7 @@ export function SimulatorPage() {
       return null;
     }
 
-    const pkg = buildVisualIntentCompiler({
+    return {
       analysis: baseAnalysis,
       freeTextInputs: intentSnapshot?.text
         ? intentSnapshot.text.split("\n").map((item) => item.trim()).filter(Boolean)
@@ -842,10 +1149,114 @@ export function SimulatorPage() {
         text: turn.userText,
         source: turn.source,
       })),
-    });
-
-    return buildVisualIntentTestBundle(pkg);
+    };
   }, [intentSnapshot, authoritativeAgentState]);
+
+  const visualIntentCompilerBasePackage = useMemo(() => {
+    if (!visualIntentCompilerInput) {
+      return null;
+    }
+    return buildVisualIntentCompiler(visualIntentCompilerInput);
+  }, [visualIntentCompilerInput]);
+
+  const visualIntentCompilerMergedPackage = useMemo(() => {
+    if (!visualIntentCompilerInput) {
+      return null;
+    }
+    return buildVisualIntentCompiler({
+      ...visualIntentCompilerInput,
+      retrievalBridgeInputs: semanticRetrievalState
+        ? [{ query: semanticRetrievalState.query, retrievalResults: semanticRetrievalState.results }]
+        : undefined,
+    });
+  }, [visualIntentCompilerInput, semanticRetrievalState]);
+
+  const visualIntentBundle = useMemo(() => {
+    if (!visualIntentCompilerMergedPackage) {
+      return null;
+    }
+    return buildVisualIntentTestBundle(visualIntentCompilerMergedPackage);
+  }, [visualIntentCompilerMergedPackage]);
+
+  const retrievalBridgeOutput = useMemo(() => {
+    if (!semanticRetrievalState || semanticRetrievalState.results.length === 0) {
+      return null;
+    }
+    return semanticRetrievalToSlotDelta(semanticRetrievalState.query, semanticRetrievalState.results);
+  }, [semanticRetrievalState]);
+
+  const retrievalExecutionDebug = useMemo<RetrievalExecutionDebugInfo>(() => {
+    const retrievalInputsProvided = Boolean(semanticRetrievalState && semanticRetrievalState.results.length > 0);
+    const retrievalQueryCount = semanticRetrievalState ? 1 : 0;
+    const retrievalResultCount = semanticRetrievalState?.results.length ?? 0;
+    const motifTraceCount = visualIntentCompilerMergedPackage?.semanticSpec.pattern?.motifTraces?.length ?? 0;
+    const renderingMode = visualIntentCompilerMergedPackage?.semanticSpec.pattern?.renderingMode;
+    const keyElements = visualIntentCompilerMergedPackage?.semanticSpec.pattern?.keyElements ?? [];
+    const motifTraceSubjects = (visualIntentCompilerMergedPackage?.semanticSpec.pattern?.motifTraces ?? []).map((item) => item.sourceSubject);
+    const bridgeProducedSlotDelta = hasMeaningfulRetrievalBridgeOutput(retrievalBridgeOutput);
+    const semanticSpecCarriesRetrievalTrace = motifTraceCount > 0;
+    const effectiveSignals = collectRetrievalEffectSignals(
+      visualIntentCompilerBasePackage?.semanticSpec,
+      visualIntentCompilerMergedPackage?.semanticSpec,
+      visualIntentCompilerBasePackage?.negativePrompt,
+      visualIntentCompilerMergedPackage?.negativePrompt,
+      visualIntentCompilerBasePackage?.unresolvedQuestions ?? [],
+      visualIntentCompilerMergedPackage?.unresolvedQuestions ?? [],
+    );
+    const actualInvocationDetected = retrievalInputsProvided && retrievalResultCount > 0 && effectiveSignals.length > 0;
+
+    const status: RetrievalExecutionDebugInfo["status"] = actualInvocationDetected
+      ? "effective"
+      : retrievalInputsProvided
+        ? "bridge-only"
+        : "not-called";
+
+    const reason = semanticRetrievalError
+      ? `semantic retrieval 请求失败：${semanticRetrievalError}`
+      : actualInvocationDetected
+      ? `当前页面链路已经传入 retrieval results，并且 merge 后检测到这些 retrieval 生效信号：${effectiveSignals.join(" · ")}。`
+      : retrievalInputsProvided
+        ? bridgeProducedSlotDelta
+          ? "retrieval bridge 已产出 slot delta，但 merge 后尚未观察到可接受的生效信号，需要继续核查 merge 覆盖或展示逻辑。"
+          : "页面层已经传入 retrieval results，但 retrieval bridge 本身还没有产出足够明确的 slot delta。"
+        : SEMANTIC_RETRIEVAL_ENABLED
+          ? "semantic retrieval 已启用，但当前还没有拿到有效 topK 结果，所以 compiler 还没收到可用 retrievalBridgeInputs。"
+          : "semantic retrieval 当前被环境开关关闭，所以本地 BAAI/bge-m3 在这条页面链路里不会被调用。";
+
+    return {
+      retrievalEnabled: SEMANTIC_RETRIEVAL_ENABLED,
+      compilerSupportsRetrievalBridge: true,
+      retrievalInputsProvided,
+      retrievalQueryCount,
+      retrievalResultCount,
+      actualInvocationDetected,
+      bridgeProducedSlotDelta,
+      semanticSpecCarriesRetrievalTrace,
+      motifTraceCount,
+      renderingMode,
+      query: semanticRetrievalState?.query ?? semanticRetrievalQuery ?? undefined,
+      keyElements,
+      topResults: semanticRetrievalState?.results ?? [],
+      motifTraceSubjects,
+      effectiveSignals,
+      bridgeOutput: retrievalBridgeOutput ?? undefined,
+      mergedSemanticSpec: visualIntentCompilerMergedPackage?.semanticSpec,
+      mergedNegativePrompt: visualIntentCompilerMergedPackage?.negativePrompt,
+      mergedUnresolvedQuestions: visualIntentCompilerMergedPackage?.unresolvedQuestions ?? [],
+      loading: semanticRetrievalLoading,
+      error: semanticRetrievalError ?? undefined,
+      status,
+      reason,
+    };
+  }, [
+    visualIntentCompilerBasePackage,
+    visualIntentCompilerMergedPackage,
+    retrievalBridgeOutput,
+    semanticRetrievalState,
+    semanticRetrievalQuery,
+    semanticRetrievalLoading,
+    semanticRetrievalError,
+  ]);
 
   const baseNearestRefs = useMemo(() => findNearestAnnotatedAssets(firstOrderFromState(baseState), referenceAssets, 3), [baseState, referenceAssets]);
   const preferenceRef = useMemo(() => {
@@ -1266,6 +1677,7 @@ export function SimulatorPage() {
           );
         })()}
         {visualIntentBundle && <VisualIntentBundleCard bundle={visualIntentBundle} previousBundle={previousVisualIntentBundle} />}
+        <RetrievalExecutionCard debug={retrievalExecutionDebug} />
         <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-500">
           <div className="mb-1">
             分析状态：

@@ -1,4 +1,9 @@
 from typing import Optional, Union
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
@@ -20,6 +25,9 @@ from app.schemas import (
     PrototypeRetrievalRequest,
     PrototypeRetrievalResponse,
     PrototypeRetrievalEntryResponse,
+    SemanticRetrievalRequest,
+    SemanticRetrievalResponse,
+    SemanticRetrievalMatchItem,
     PromptTrace,
 )
 from app.services.local_llm_fallback import request_llm_fallback_candidates
@@ -44,6 +52,74 @@ from app.services.prompt_composer import compose_from_liked_ids, compose_from_re
 
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _resolve_semantic_retrieval_python() -> str:
+    configured = os.getenv("BGE_M3_PYTHON_PATH")
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+        raise RuntimeError(f"Configured BGE_M3_PYTHON_PATH is not executable: {candidate}")
+
+    project_python = _project_root() / "backend" / ".venv" / "bin" / "python"
+    if project_python.exists() and os.access(project_python, os.X_OK):
+        return str(project_python)
+
+    raise RuntimeError(
+        "Semantic retrieval Python runtime not found. Expected project venv at "
+        f"{project_python}. Refusing to fall back to system python."
+    )
+
+
+def _run_semantic_retrieval_subprocess(query: str, candidates: list[dict[str, str]], top_k: int):
+    python_executable = _resolve_semantic_retrieval_python()
+    service_script = _project_root() / "backend" / "app" / "services" / "bge_m3_retrieval.py"
+    if not service_script.exists():
+        raise RuntimeError(f"Semantic retrieval script not found: {service_script}")
+
+    payload = json.dumps({"query": query, "candidates": candidates, "k": top_k}, ensure_ascii=False)
+    env = os.environ.copy()
+    env.setdefault("PYTHONNOUSERSITE", "1")
+
+    completed = subprocess.run(
+        [python_executable, str(service_script), "--task", "retrieve", "--payload", payload],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(_project_root()),
+        check=False,
+    )
+
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        detail = stderr or stdout or f"subprocess exited with code {completed.returncode}"
+        raise RuntimeError(
+            "Semantic retrieval subprocess failed. "
+            f"python={python_executable} script={service_script} detail={detail}"
+        )
+
+    raw_output = (completed.stdout or "").strip()
+    if not raw_output:
+        raise RuntimeError(
+            "Semantic retrieval subprocess returned empty output. "
+            f"python={python_executable} script={service_script}"
+        )
+
+    try:
+        parsed = json.loads(raw_output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Semantic retrieval subprocess returned invalid JSON. "
+            f"python={python_executable} script={service_script} output={raw_output[:500]}"
+        ) from exc
+
+    return parsed
 
 
 @router.get("/health")
@@ -121,6 +197,20 @@ def search_prototype_retrieval(payload: PrototypeRetrievalRequest) -> PrototypeR
     return PrototypeRetrievalResponse(
         total=len(matches),
         items=[PrototypeRetrievalEntryResponse(**match.__dict__) for match in matches],
+    )
+
+
+@router.post("/semantic-retrieval/search", response_model=SemanticRetrievalResponse)
+def search_semantic_retrieval(payload: SemanticRetrievalRequest) -> SemanticRetrievalResponse:
+    try:
+        candidates = [{"id": c.id, "text": c.text, "source": c.source} for c in payload.candidates]
+        response = _run_semantic_retrieval_subprocess(payload.query, candidates, payload.top_k)
+        results = response.get("results", [])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Semantic retrieval failed: {exc}") from exc
+    return SemanticRetrievalResponse(
+        total=len(results),
+        results=[SemanticRetrievalMatchItem(**r) for r in results],
     )
 
 

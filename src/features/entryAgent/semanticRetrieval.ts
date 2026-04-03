@@ -1,5 +1,5 @@
-import { OPENING_OPTION_REGISTRY } from "./openingOptionRegistry";
-import { POETIC_MAPPINGS } from "./poeticMappings";
+import { OPENING_OPTION_REGISTRY } from "./openingOptionRegistry.ts";
+import { POETIC_MAPPINGS } from "./poeticMappings.ts";
 
 export type SemanticCandidateSource = "poeticMappings" | "openingOptions" | "explicitMotifs";
 
@@ -69,6 +69,12 @@ export const EXPLICIT_MOTIF_CANDIDATES: ExplicitMotifCandidateDefinition[] = [
     label: "stone-texture",
     aliases: ["石纹", "岩层", "石头肌理", "冷石头"],
     description: "偏石材、矿物层理、粗细变化的表面肌理。",
+  },
+  {
+    id: "pre-rain-air",
+    label: "pre-rain-air",
+    aliases: ["下雨前的空气", "下雨前五分钟的空气", "雨前空气", "潮气悬着的空气"],
+    description: "偏雨前潮气、压低边界、空气悬着、水汽未落下的临界氛围。",
   },
 ];
 
