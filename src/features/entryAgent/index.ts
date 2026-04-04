@@ -2,11 +2,14 @@ import { buildDirectInterpretationCandidates } from "./directHitInterpretation";
 import { buildFallbackCandidateSet } from "./fallbackCandidateGenerator";
 import { detectHighValueFieldHits } from "./fieldHitDetection";
 import { deriveFollowUpRecommendation } from "./followUpRecommendation";
+import { normalizeTextInputEvent } from "./inputLayer";
+import { interpretRetrievedQuery } from "./interpretationLayer";
 import { mergeInterpretationCandidates } from "./prototypeMerge";
 import { resolvePrototypeCandidates } from "./prototypeMatching";
 import { buildIntentIntakeGoalState } from "./intakeGoalState";
-import { buildQuestionPlan } from "./questionPlanning";
+import { buildDisplayAwarePlan } from "./planningLayer";
 import { resolvePreviousQuestion } from "./questionResolution";
+import { retrieveSemanticContext } from "./retrievalLayer";
 import { buildSemanticCanvas, buildSemanticCanvasCandidates, enrichDetectionWithSemanticCanvas } from "./semanticCanvas";
 import { decomposeSemanticCues } from "./semanticCueDecomposition";
 import { buildSemanticGaps } from "./semanticGapPlanner";
@@ -16,17 +19,24 @@ import { deriveUpdatedSlotStates } from "./slotStateMachine";
 import type { EntryAgentInput, EntryAgentResult } from "./types";
 
 export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAgentResult> {
-  const initialDetection = detectHighValueFieldHits(input.text);
+  const normalizedEvent = normalizeTextInputEvent(input.text);
+  const retrievalLayer = await retrieveSemanticContext({ event: normalizedEvent });
+  const interpretationLayer = interpretRetrievedQuery({
+    event: normalizedEvent,
+    retrieval: retrievalLayer,
+  });
+  const queryRoute = interpretationLayer.queryRoute;
+  const initialDetection = detectHighValueFieldHits(normalizedEvent.normalizedText);
   const semanticUnits = decomposeSemanticCues(input, initialDetection);
   const semanticCanvas = await buildSemanticCanvas({
-    text: input.text,
+    text: normalizedEvent.normalizedText,
     detection: initialDetection,
     semanticUnits,
   });
   const detection = enrichDetectionWithSemanticCanvas(initialDetection, semanticCanvas);
   const semanticCanvasCandidates = buildSemanticCanvasCandidates({
     semanticCanvas,
-    text: input.text,
+    text: normalizedEvent.normalizedText,
   });
   const directCandidates = buildDirectInterpretationCandidates(input, detection, semanticUnits);
   const { prototypeMatches, candidates: prototypeCandidates } = await resolvePrototypeCandidates(input, detection, semanticUnits);
@@ -65,12 +75,16 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     updatedSlotStates,
     resolutionState,
   });
-  const { questionCandidates, questionPlan } = await buildQuestionPlan({
+  const { questionCandidates, questionPlan, displayPlan } = await buildDisplayAwarePlan({
+    queryText: normalizedEvent.normalizedText,
     semanticGaps,
     previousQuestion: input.previousQuestionTrace,
     questionHistory: input.questionHistory,
     bridge,
     hitFields: detection.hitFields,
+    interpretation: interpretationLayer,
+    retrieval: retrievalLayer,
+    comparisonSelections: input.comparisonSelections,
     latestReplyText: input.latestReplyText,
     resolutionState,
     latestResolution,
@@ -91,6 +105,9 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
   });
   // Build the full analysis result first so intakeGoalState can use it
   const partialResult = {
+    queryRoute,
+    interpretationLayer,
+    retrievalLayer,
     ...detection,
     interpretationMerge,
     ...bridge,
@@ -98,6 +115,7 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     semanticGaps,
     questionCandidates,
     questionPlan,
+    displayPlan,
     questionResolutionState: questionPlan?.resolutionState ?? resolutionState,
     latestResolution: questionPlan?.latestResolution ?? latestResolution,
     ...recommendation,
@@ -119,3 +137,9 @@ export * from "./explicitMotifExpansion";
 export * from "./visualIntentCompiler";
 export * from "./visualIntentTestBundle";
 export * from "./promptAdapters";
+export * from "./queryRouting";
+export * from "./inputLayer";
+export * from "./retrievalLayer";
+export * from "./interpretationLayer";
+export * from "./planningLayer";
+export * from "./compilerLayer";

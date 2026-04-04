@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, Play, Heart, X, Trophy, ChevronDown, ChevronUp } from "lucide-react";
+import { RefreshCw, Play, Heart, X, Trophy, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from "lucide-react";
 
 import { collectLikedAnchors, createRandomBaseState, generateRoundVariants, getPrimarySlot, getRoundMode, reduceRound } from "./mockEngine";
 import { buildIntentStabilizationSnapshot, buildIntentStabilizationSnapshotFromAgentState, type IntentUnderstandingSnapshot } from "./intentStabilization";
@@ -14,6 +14,8 @@ import {
   buildDerivedEntryAnalysisFromAgentState,
   buildVisualIntentCompiler,
   buildVisualIntentTestBundle,
+  type ComparisonCandidate,
+  type ComparisonSelectionSignal,
   createIntentIntakeAgentState,
   getOpeningFamiliesForFirstTurns,
   OPENING_OPTION_INDEX,
@@ -27,6 +29,7 @@ import {
   type VisualIntentTestBundle,
   updateAgentStateFromSignal,
 } from "@/features/entryAgent";
+import { processIntakeSignal } from "@/features/entryAgent/signalProcessor";
 import type { AnchorCard, FeedbackRecord, SimulatorState, VariantCard } from "./types";
 import { fetchSemanticRetrieval, type SemanticRetrievalMatchResult } from "@/lib/api";
 import { semanticRetrievalToSlotDelta } from "@/features/entryAgent/retrievalSemanticBridge";
@@ -381,6 +384,46 @@ function DialogueBubble({
   );
 }
 
+function ComparisonCard({
+  candidate,
+  onPrefer,
+  onReject,
+  disabled,
+}: {
+  candidate: ComparisonCandidate;
+  onPrefer: (candidate: ComparisonCandidate) => void;
+  onReject: (candidate: ComparisonCandidate) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="rounded-[24px] border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">
+        {candidate.groupId} · {candidate.intendedSplitDimension}
+      </div>
+      <div className="mt-3 text-sm leading-6 text-stone-800">{candidate.curatedDisplayText}</div>
+      <div className="mt-3 text-xs leading-5 text-stone-500">{candidate.semanticDeltaHint}</div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onPrefer(candidate)}
+          disabled={disabled}
+          className="rounded-2xl bg-stone-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          更像这个
+        </button>
+        <button
+          type="button"
+          onClick={() => onReject(candidate)}
+          disabled={disabled}
+          className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          不像这个
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function buildVisualIntentDiff(current: VisualIntentTestBundle, previous: VisualIntentTestBundle | null) {
   if (!previous) {
     return ["当前是第一版 visual intent bundle。"];
@@ -596,6 +639,7 @@ function VisualIntentBundleCard({ bundle, previousBundle }: { bundle: VisualInte
 }
 
 function RetrievalExecutionCard({ debug }: { debug: RetrievalExecutionDebugInfo }) {
+  const [collapsed, setCollapsed] = useState(true);
   const statusTone =
     debug.status === "effective"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800"
@@ -610,6 +654,23 @@ function RetrievalExecutionCard({ debug }: { debug: RetrievalExecutionDebugInfo 
         ? "桥接存在但未确认模型调用"
         : "当前未真实调用";
 
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setCollapsed(false)}
+        className="fixed bottom-4 right-0 z-40 flex items-center gap-2 rounded-l-2xl border border-r-0 border-stone-200 bg-white/95 px-3 py-3 shadow-2xl backdrop-blur"
+        aria-label="展开 BAAI/bge-m3 实际调用观测面板"
+      >
+        <ChevronLeft className="h-4 w-4 text-stone-600" />
+        <div className="text-left">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-stone-500">Retrieval</div>
+          <div className="text-xs font-semibold text-stone-800">BAAI/bge-m3</div>
+        </div>
+      </button>
+    );
+  }
+
   return (
     <div className="fixed bottom-4 right-4 z-40 w-[min(720px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-stone-200 bg-white/95 p-4 shadow-2xl backdrop-blur">
       <div className="flex items-center justify-between gap-3">
@@ -617,7 +678,18 @@ function RetrievalExecutionCard({ debug }: { debug: RetrievalExecutionDebugInfo 
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Retrieval Execution</div>
           <div className="mt-1 text-sm font-semibold text-stone-800">BAAI/bge-m3 实际调用观测</div>
         </div>
-        <div className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusTone}`}>{statusLabel}</div>
+        <div className="flex items-center gap-2">
+          <div className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusTone}`}>{statusLabel}</div>
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            className="inline-flex items-center gap-1 rounded-full border border-stone-300 bg-white px-3 py-1 text-xs font-medium text-stone-700"
+            aria-label="收起 BAAI/bge-m3 实际调用观测面板"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+            收起
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -1115,7 +1187,7 @@ export function SimulatorPage() {
       text: intentSnapshot.text,
       turnCount: intentSnapshot.turnCount,
       currentUnderstanding: intentSnapshot.currentUnderstanding,
-      followUpQuestion: intentSnapshot.followUpQuestion,
+      followUpQuestion: intentSnapshot.followUpQuestion ?? "当前这轮以 comparison cards 为主，不强制追问。",
       readyToGenerate: intentSnapshot.readyToGenerate,
       analysis: intentSnapshot.analysis,
       cumulativeCanvas: intentSnapshot.conversationState.cumulativeCanvas,
@@ -1144,6 +1216,7 @@ export function SimulatorPage() {
           optionId: turn.userText,
           label: turn.userText,
         })),
+      comparisonSelections: authoritativeAgentState?.comparisonSelections ?? [],
       turnHistory: (intentSnapshot?.conversationState.dialogue ?? []).map((turn) => ({
         turnIndex: turn.turnIndex,
         text: turn.userText,
@@ -1364,6 +1437,49 @@ export function SimulatorPage() {
     await submitIntentText(entryText);
   };
 
+  const handleComparisonSelection = async (candidate: ComparisonCandidate, mode: "prefer" | "reject") => {
+    const previousQuestionTrace = authoritativeAgentState?.questionHistory
+      ? authoritativeAgentState.questionHistory[authoritativeAgentState.questionHistory.length - 1]
+      : undefined;
+    const signal: ComparisonSelectionSignal = {
+      type: "comparison-selection",
+      selection: {
+        candidateId: candidate.id,
+        groupId: candidate.groupId,
+        intendedSplitDimension: candidate.intendedSplitDimension,
+        mode,
+        userFacingText: candidate.curatedDisplayText,
+        selectionEffect: {
+          ...candidate.selectionEffect,
+          preferredPolarity: mode === "prefer" ? "prefer" : "avoid",
+        },
+      },
+      turnIndex: (authoritativeAgentState?.turnIndex ?? 0) + 1,
+      source: "user",
+    };
+    const nextAnalysis = await processIntakeSignal(signal, {
+      cumulativeText: intentSnapshot?.text ?? authoritativeAgentState?.cumulativeText,
+      currentAgentState: authoritativeAgentState ?? undefined,
+      previousQuestionTrace,
+      resolutionState: authoritativeAgentState?.resolutionState ?? intentSnapshot?.conversationState.resolutionState,
+      previousGoalState: authoritativeAgentState?.goalState ?? intentSnapshot?.analysis.intakeGoalState,
+      questionHistory: authoritativeAgentState?.questionHistory ?? intentSnapshot?.conversationState.questionHistory,
+      previousAnalysis: intentSnapshot?.analysis ?? undefined,
+    });
+    const nextSnapshot = buildIntentStabilizationSnapshotFromAgentState({
+      previousSnapshot: intentSnapshot,
+      previousText: intentSnapshot?.text,
+      previousTurnCount: intentSnapshot?.turnCount ?? 0,
+      currentAgentState: nextAnalysis.agentState ?? authoritativeAgentState ?? createIntentIntakeAgentState(),
+      committedReplyText: `${mode === "prefer" ? "更像这个" : "不像这个"}：${candidate.curatedDisplayText}`,
+      source: "comparison-selection",
+    });
+    setPreviousVisualIntentBundle(visualIntentBundle);
+    setCurrentAgentState(nextSnapshot.analysis.agentState ?? null);
+    setIntentSnapshot(nextSnapshot);
+    setEntryAnalysis(nextSnapshot.analysis);
+  };
+
   const handleOpeningOptionClick = async (label: string, _family: OpeningQuestionFamilyDefinition) => {
     const selectedOption = activeOpeningFamily?.options.find((option) => option.label === label);
     if (!selectedOption) {
@@ -1503,9 +1619,9 @@ export function SimulatorPage() {
     <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Expert-guided conversation</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Curated showroom intake</div>
           <div className="mt-2 max-w-2xl text-sm leading-6 text-stone-600">
-            先像和资深地毯设计师聊 2-3 轮。每次我会先接住你刚说的判断，再只推进一个最值得确认的分叉。
+            先不用答题。你可以给一句感觉，也可以直接从下面的差异里判断更像哪个方向。
           </div>
         </div>
         <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-500">
@@ -1514,11 +1630,48 @@ export function SimulatorPage() {
         </div>
       </div>
 
-      <div className="mt-5 max-h-[520px] space-y-4 overflow-y-auto pr-1">
+      {!intentSnapshot && (
+        <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-700">
+          带着一句模糊感觉进来就行。比如“下雨前五分钟的空气”“花叶意向”“不要太花”，或者直接点选你更靠近的比较方向。
+        </div>
+      )}
+
+      {intentSnapshot && (
+        <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50 p-4">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Agent snapshot</div>
+          <div className="mt-3 text-base leading-7 text-stone-800">{intentSnapshot.replySnapshot}</div>
+        </div>
+      )}
+
+      {intentSnapshot?.comparisonCandidates && intentSnapshot.comparisonCandidates.length > 0 && (
+        <div className="mt-5">
+          <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Curated comparisons</div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {intentSnapshot.comparisonCandidates.map((candidate) => (
+              <ComparisonCard
+                key={candidate.id}
+                candidate={candidate}
+                disabled={isIntentAnalyzing}
+                onPrefer={(item) => void handleComparisonSelection(item, "prefer")}
+                onReject={(item) => void handleComparisonSelection(item, "reject")}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {intentSnapshot?.followUpQuestion && (
+        <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50 p-4">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Only if needed</div>
+          <div className="mt-2 text-sm leading-6 text-stone-700">{intentSnapshot.followUpQuestion}</div>
+        </div>
+      )}
+
+      <div className="mt-5 max-h-[300px] space-y-4 overflow-y-auto pr-1">
         {!intentSnapshot && (
           <DialogueBubble
             role="expert"
-            text="先告诉我你想让这块地毯解决什么感觉问题。可以从气质、颜色、图案存在感，或者你脑子里的一句意象开始。"
+            text="先说一句感觉就够了，我会先回显我的判断，再给你几种已经策展过的差异。"
           />
         )}
 
@@ -1533,10 +1686,10 @@ export function SimulatorPage() {
       {activeOpeningFamily && (
         <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50 p-4">
           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">
-            可直接回答这一步
+            Shortcut options
           </div>
           <div className="mt-2 text-sm leading-6 text-stone-700">
-            {formatOpeningPromptForPanel(activeOpeningFamily.family.prompt)}
+            如果你更想直接点一个方向，可以用这些 shortcut；它们不再是主交互。
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {activeOpeningFamily.options.map((option) => {
@@ -1568,11 +1721,11 @@ export function SimulatorPage() {
       )}
 
       <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50 p-4">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">继续补充</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Add one line</div>
         <textarea
           value={composerValue}
           onChange={(event) => setEntryText(event.target.value)}
-          placeholder={intentSnapshot ? "顺着上面的回应继续补一句就行" : "例如：想给卧室找一块更安静一点、不要太花的地毯"}
+          placeholder={intentSnapshot ? "也可以顺着上面的比较，再补一句你更在意什么" : "例如：下雨前五分钟的空气 / 花叶意向 / 不要太花"}
           className="mt-3 min-h-[112px] w-full rounded-2xl border border-stone-300 bg-white px-4 py-3 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-stone-500"
         />
         <div className="mt-4 flex flex-wrap gap-3">
@@ -1599,39 +1752,8 @@ export function SimulatorPage() {
 
   const understandingPanel = (
     <div className="rounded-[24px] border border-stone-200 bg-stone-50 p-4">
-      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Side summary</div>
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Workbench</div>
       <div className="mt-3 space-y-3 text-sm text-stone-600">
-        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Current understanding</div>
-          <div className="mt-2 text-sm leading-6 text-stone-700">
-            {intentSnapshot?.currentUnderstanding ?? "前三轮会依次确认氛围、空间、图案这三条主轴；这一轮先只问一个维度。"}
-          </div>
-          {!intentSnapshot && authoritativeAgentState && authoritativeAgentState.slots.some((slot) => slot.topScore > 0) && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {authoritativeAgentState.slots
-                .filter((slot) => slot.topScore > 0)
-                .map((slot) => (
-                  <SlotPhasePill
-                    key={slot.slot}
-                    slot={{
-                      slot: slot.slot,
-                      phase: mapMacroStatusToDisplayPhase(slot.status),
-                      topScore: slot.topScore,
-                      topDirection: slot.topDirection,
-                    }}
-                  />
-                ))}
-            </div>
-          )}
-        </div>
-        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Expert next move</div>
-          <div className="mt-2 text-sm leading-6 text-stone-700">
-            {intentSnapshot?.followUpQuestion ?? (activeOpeningFamily
-              ? formatOpeningPromptForPanel(activeOpeningFamily.family.prompt)
-              : "我会先抓最值得确认的一点，再问你下一句。")}
-          </div>
-        </div>
         {intentSnapshot?.analysis.intakeGoalState && (
           <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
             <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">槽位进度</div>
@@ -1770,10 +1892,7 @@ export function SimulatorPage() {
         {isImmersiveQaOpen && (
           <div className="fixed left-1/2 top-24 z-30 w-[min(720px,calc(100vw-2rem))] -translate-x-1/2">
             <div className="rounded-[32px] border border-stone-200 bg-white/94 p-5 shadow-lg backdrop-blur-md">
-              <div className="space-y-4">
-                {intentComposer}
-                {understandingPanel}
-              </div>
+              <div>{intentComposer}</div>
             </div>
           </div>
         )}
@@ -1821,10 +1940,7 @@ export function SimulatorPage() {
         </div>
 
         <div className="mb-6 rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.85fr)]">
-            <div>{intentComposer}</div>
-            <div>{understandingPanel}</div>
-          </div>
+          <div>{intentComposer}</div>
 
           {conversationStateLogSummary && (
             <div className="mt-5">
@@ -1839,6 +1955,7 @@ export function SimulatorPage() {
 
         <div className="grid gap-6 lg:grid-cols-[1.1fr_1.6fr]">
           <div className="space-y-6">
+            {understandingPanel}
             <div className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between">
                 <div>

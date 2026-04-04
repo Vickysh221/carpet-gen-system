@@ -1,4 +1,4 @@
-import type { EntryAgentResult } from "./types";
+import type { ComparisonSelectionRecord, EntryAgentResult } from "./types";
 
 export type SlotStatus = "missing" | "tentative" | "stable" | "committed";
 export type SignalSourceType =
@@ -147,7 +147,8 @@ export interface ConfidenceState {
 export interface TraceBundle {
   freeTextInputs: string[];
   selectedOptions: Array<{ questionId: string; optionId: string; label: string }>;
-  turnHistory: Array<{ turnIndex: number; text: string; source: "text" | "opening-selection" }>;
+  comparisonSelections: ComparisonSelectionRecord[];
+  turnHistory: Array<{ turnIndex: number; text: string; source: "text" | "opening-selection" | "comparison-selection" }>;
   poeticHits: string[];
   sourceNotes: string[];
   latestResolutionReasons: string[];
@@ -272,14 +273,15 @@ export interface VisualIntentCompilerInput {
   analysis: EntryAgentResult;
   freeTextInputs?: string[];
   selectedOptions?: Array<{ questionId: string; optionId: string; label: string }>;
-  turnHistory?: Array<{ turnIndex: number; text: string; source: "text" | "opening-selection" }>;
+  comparisonSelections?: ComparisonSelectionRecord[];
+  turnHistory?: Array<{ turnIndex: number; text: string; source: "text" | "opening-selection" | "comparison-selection" }>;
   retrievalBridgeInputs?: Array<{
     query: string;
     retrievalResults: Array<{
       id: string;
       text: string;
       score: number;
-      source: "poeticMappings" | "openingOptions" | "explicitMotifs";
+      source: "poeticMappings" | "openingOptions" | "explicitMotifs" | "comparisonLibrary";
     }>;
   }>;
 }

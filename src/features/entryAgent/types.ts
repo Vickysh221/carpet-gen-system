@@ -138,6 +138,178 @@ export type SemanticRouteHint = "direct" | "prototype" | "retrieval-entry" | "fa
 
 export type NarrativeOwnershipClass = "primary-eligible" | "secondary-only" | "ambiguity-only";
 
+export type QueryRouteType =
+  | "poetic-atmospheric"
+  | "explicit-motif"
+  | "constraint-negation"
+  | "mixed-compositional"
+  | "vague-underspecified";
+
+export type QueryInterpretationPath =
+  | "atmosphere-first"
+  | "motif-trace-first"
+  | "constraint-first"
+  | "compositional-bridge"
+  | "guided-disambiguation";
+
+export interface QueryRouteSignal {
+  kind:
+    | "poetic-cue"
+    | "atmosphere-cue"
+    | "motif-cue"
+    | "constraint-cue"
+    | "vague-cue"
+    | "composition-cue";
+  cue: string;
+  weight: number;
+  note: string;
+}
+
+export interface QueryRouteDecision {
+  detectedType: QueryRouteType;
+  confidence: number;
+  rationale: string;
+  recommendedInterpretationPath: QueryInterpretationPath;
+  trace: QueryRouteSignal[];
+}
+
+export interface NormalizedInputEvent {
+  kind: "text";
+  rawText: string;
+  normalizedText: string;
+  preservedPhrases: string[];
+  spans: SemanticInputSpan[];
+  duplicateFlags: string[];
+  pollutionFlags: string[];
+  languageHints: string[];
+  preprocessingTrace: string[];
+}
+
+export type SemanticSpanType =
+  | "phrase-span"
+  | "modifier-span"
+  | "composition-span"
+  | "negation-span"
+  | "anchor-span";
+
+export interface SemanticInputSpan {
+  id: string;
+  text: string;
+  normalizedText: string;
+  spanType: SemanticSpanType;
+  confidence: number;
+  trace: string[];
+  preservedReason: string;
+}
+
+export interface RetrievalTraceItem {
+  id: string;
+  source: string;
+  score: number;
+  text: string;
+}
+
+export interface RetrievalLayerResult {
+  query: string;
+  preservedPhrases: string[];
+  semanticCandidates: RetrievalTraceItem[];
+  comparisonCandidates: RetrievalTraceItem[];
+  trace: string[];
+}
+
+export type SemanticRoleName =
+  | "base-atmosphere"
+  | "accent-motif"
+  | "sensory-modifier"
+  | "color-cue"
+  | "structure-hint"
+  | "constraint"
+  | "rendering-bias";
+
+export interface SemanticRoleCandidate {
+  id: string;
+  role: SemanticRoleName;
+  label: string;
+  evidence: string[];
+  sourceSpanIds: string[];
+  semanticFunction: "base" | "accent" | "modifier" | "constraint" | "rendering-bias";
+  confidence: number;
+  polarity?: "support" | "avoid";
+  source: "preprocess" | "retrieval" | "route" | "rule";
+  rationale: string;
+}
+
+export interface SemanticRoleHints {
+  baseAtmosphere: SemanticRoleCandidate[];
+  accentMotif: SemanticRoleCandidate[];
+  sensoryModifiers: SemanticRoleCandidate[];
+  colorCues: SemanticRoleCandidate[];
+  structureHints: SemanticRoleCandidate[];
+  constraints: SemanticRoleCandidate[];
+  renderingBiases: SemanticRoleCandidate[];
+}
+
+export interface PatternSemanticSlotCandidate {
+  value: string;
+  confidence: number;
+  sourceRoles: string[];
+  source: "semantic-role" | "retrieval" | "route" | "constraint";
+  projectionRationale: string;
+  status: "locked" | "candidate-only" | "unresolved";
+}
+
+export interface PatternSemanticProjection {
+  formativeStructure: {
+    patternArchitecture: PatternSemanticSlotCandidate[];
+    structuralOrder: PatternSemanticSlotCandidate[];
+    densityBreathing: PatternSemanticSlotCandidate[];
+    flowDirection: PatternSemanticSlotCandidate[];
+  };
+  semanticMaterial: {
+    motifFamily: PatternSemanticSlotCandidate[];
+    abstractionLevel: PatternSemanticSlotCandidate[];
+    semanticAnchorStrength: PatternSemanticSlotCandidate[];
+  };
+  atmosphericSurface: {
+    colorClimate: PatternSemanticSlotCandidate[];
+  };
+  anchorHints: string[];
+  variantHints: string[];
+  constraintHints: string[];
+  slotTrace: string[];
+}
+
+export interface InterpretationUnresolvedSplit {
+  id: string;
+  dimension: string;
+  prompt: string;
+  options: string[];
+  rationale: string;
+  derivedFrom: string[];
+  whyHighValue: string;
+  misleadingPathsPrevented: string[];
+  confidence: number;
+}
+
+export interface InterpretationConfidenceSummary {
+  lockedSignals: string[];
+  candidateOnlySignals: string[];
+  unresolvedSignals: string[];
+  confidenceScore: number;
+}
+
+export interface InterpretationLayerResult {
+  queryRoute: QueryRouteDecision;
+  semanticRoleHints: string[];
+  semanticRoles: SemanticRoleHints;
+  patternSemanticProjection: PatternSemanticProjection;
+  unresolvedSplits: InterpretationUnresolvedSplit[];
+  misleadingPathsToAvoid: string[];
+  confidenceSummary: InterpretationConfidenceSummary;
+  retrievalHints: string[];
+  trace: string[];
+}
+
 export interface SemanticUnit {
   id: string;
   cue: string;
@@ -254,6 +426,7 @@ export interface EntryAgentInput {
   questionHistory?: QuestionTrace[];
   latestReplyText?: string;
   resolutionState?: QuestionResolutionState;
+  comparisonSelections?: ComparisonSelectionRecord[];
   /** Previous goal state — used to detect slot phase transitions (e.g. lock-candidate). */
   previousGoalState?: IntentIntakeGoalState;
 }
@@ -282,6 +455,12 @@ export interface EntryAgentRecommendationResult {
   suggestedQaMode: QaMode;
   suggestedFollowUpTarget?: HighValueField;
   suggestedQuestionIntent?: string;
+}
+
+export interface EntryAgentRoutingResult {
+  queryRoute: QueryRouteDecision;
+  interpretationLayer?: InterpretationLayerResult;
+  retrievalLayer?: RetrievalLayerResult;
 }
 
 export interface SemanticDirection {
@@ -589,6 +768,7 @@ export interface IntentIntakeAgentState {
   questionHistory: QuestionTrace[];
   latestSemanticMapping?: IntentSemanticMapping;
   latestAnalysis?: EntryAgentResult;
+  comparisonSelections: ComparisonSelectionRecord[];
   nextAction?: AgentNextAction;
   lastSignalType?: IntakeSignal["type"];
 }
@@ -613,6 +793,13 @@ export interface TextIntakeSignal {
 export interface OpeningSelectionSignal {
   type: "opening-selection";
   selections: string[];
+  turnIndex: number;
+  source: "user";
+}
+
+export interface ComparisonSelectionSignal {
+  type: "comparison-selection";
+  selection: ComparisonSelectionRecord;
   turnIndex: number;
   source: "user";
 }
@@ -667,6 +854,7 @@ export interface ConfirmationSignal {
 export type IntakeSignal =
   | TextIntakeSignal
   | OpeningSelectionSignal
+  | ComparisonSelectionSignal
   | ImagePreferenceSignal
   | ImageComparisonSignal
   | ConfirmationSignal;
@@ -722,11 +910,56 @@ export interface QuestionPlan {
   latestResolution?: QuestionResolution;
 }
 
+export interface ComparisonSelectionEffect {
+  targetField?: HighValueField;
+  targetSlot?: EntryAgentSlotKey;
+  intendedPath?: QueryInterpretationPath;
+  patchHint: string;
+  semanticDeltaHint: string;
+  preferredPolarity?: "prefer" | "avoid";
+  statePatch?: EntryAgentStatePatch;
+  canonicalEffects?: {
+    atmosphereQualities?: string[];
+    patternQualities?: string[];
+    presenceQualities?: string[];
+    colorQualities?: string[];
+    arrangementQualities?: string[];
+  };
+}
+
+export interface ComparisonCandidate {
+  id: string;
+  groupId: string;
+  intendedSplitDimension: string;
+  curatedDisplayText: string;
+  semanticDeltaHint: string;
+  derivedFrom?: string[];
+  selectionEffect: ComparisonSelectionEffect;
+}
+
+export interface ComparisonSelectionRecord {
+  candidateId: string;
+  groupId: string;
+  intendedSplitDimension: string;
+  mode: "prefer" | "reject";
+  userFacingText: string;
+  selectionEffect: ComparisonSelectionEffect;
+}
+
+export interface DisplayPlan {
+  replySnapshot: string;
+  comparisonCandidates: ComparisonCandidate[];
+  whetherToAskQuestion: boolean;
+  followUpQuestion?: string;
+  plannerTrace: string[];
+}
+
 export interface EntryAgentSemanticPlanningResult {
   semanticUnderstanding: SemanticUnderstanding;
   semanticGaps: SemanticGap[];
   questionCandidates: NextQuestionCandidate[];
   questionPlan?: QuestionPlan;
+  displayPlan?: DisplayPlan;
   questionResolutionState?: QuestionResolutionState;
   latestResolution?: QuestionResolution;
   intakeGoalState?: IntentIntakeGoalState;
@@ -740,4 +973,5 @@ export interface EntryAgentResult
     EntryAgentBridgeResult,
     EntryAgentRecommendationResult,
     EntryAgentInterpretationResult,
-    EntryAgentSemanticPlanningResult {}
+    EntryAgentSemanticPlanningResult,
+    EntryAgentRoutingResult {}

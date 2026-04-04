@@ -1,7 +1,9 @@
 import { activeAnswerAlignmentProvider } from "./answerAlignmentAdapter";
+import { composeComparisonCandidatesFromRetrieval, fallbackComparisonCandidatesForPath } from "./comparisonLibrary";
 import { detectHighValueFieldHits } from "./fieldHitDetection";
 import { getSlotQuestionSpec } from "./slotQuestionSpec";
-import type { AnswerAlignment, EntryAgentResult, NextQuestionCandidate, HighValueField, QuestionPlan, QuestionResolution, QuestionResolutionState, QuestionTrace, SemanticGap } from "./types";
+import type { AnswerAlignment, ComparisonCandidate, ComparisonSelectionRecord, DisplayPlan, EntryAgentResult, HighValueField, InterpretationLayerResult, NextQuestionCandidate, PatternSemanticProjection, QueryRouteDecision, QuestionPlan, QuestionResolution, QuestionResolutionState, QuestionTrace, RetrievalLayerResult, SemanticGap, SemanticRoleHints } from "./types";
+import type { SemanticRetrievalMatchResult } from "@/lib/api";
 
 /** Fields that must be covered in first 3 turns of dialogue. */
 const INITIAL_COVERAGE_FIELDS: HighValueField[] = ["overallImpression", "patternTendency", "spaceContext"];
@@ -259,6 +261,379 @@ function rerankQuestionCandidates(input: {
   });
 }
 
+function buildReplySnapshot(input: {
+  queryRoute: QueryRouteDecision;
+  interpretation?: InterpretationLayerResult;
+  semanticCanvas?: EntryAgentResult["semanticCanvas"];
+  hitFields: EntryAgentResult["hitFields"];
+  selectedQuestion?: NextQuestionCandidate;
+}) {
+  const baseAtmosphere = input.interpretation?.semanticRoles.baseAtmosphere[0]?.label;
+  const accentMotif = input.interpretation?.semanticRoles.accentMotif[0]?.label;
+
+  if (input.queryRoute.detectedType === "mixed-compositional") {
+    return `我会先把它拆成两层来看：底子先保 ${baseAtmosphere ?? "空气和气氛"}，再决定那一点 ${accentMotif ?? "题材痕迹"} 要保留到什么程度。`;
+  }
+
+  if (input.queryRoute.detectedType === "poetic-atmospheric") {
+    return `我会先把它理解成 ${baseAtmosphere ?? "空气、边界和表面天气"}，不急着把它落成具体对象。`;
+  }
+
+  if (input.queryRoute.detectedType === "explicit-motif") {
+    return `我先把它收成 ${accentMotif ?? "可控的母题痕迹"}，重点不是把对象画出来，而是决定痕迹保留到什么强度。`;
+  }
+
+  if (input.queryRoute.detectedType === "constraint-negation") {
+    return "我先把反方向收住，先明确哪些倾向不能放大，再决定正向意图该如何成立。";
+  }
+
+  return "我先把它看成一个还没完全落稳的方向，先给你几种更值钱的差异，帮你辨认真正要保哪一层。";
+}
+
+function createDerivedComparison(input: {
+  id: string;
+  groupId: string;
+  intendedSplitDimension: string;
+  text: string;
+  delta: string;
+  derivedFrom?: string[];
+  targetField?: ComparisonCandidate["selectionEffect"]["targetField"];
+  targetSlot?: ComparisonCandidate["selectionEffect"]["targetSlot"];
+  path?: ComparisonCandidate["selectionEffect"]["intendedPath"];
+  canonicalEffects?: ComparisonCandidate["selectionEffect"]["canonicalEffects"];
+}): ComparisonCandidate {
+  return {
+    id: input.id,
+    groupId: input.groupId,
+    intendedSplitDimension: input.intendedSplitDimension,
+    curatedDisplayText: input.text,
+    semanticDeltaHint: input.delta,
+    derivedFrom: input.derivedFrom,
+    selectionEffect: {
+      targetField: input.targetField,
+      targetSlot: input.targetSlot,
+      intendedPath: input.path,
+      patchHint: input.delta,
+      semanticDeltaHint: input.delta,
+      preferredPolarity: "prefer",
+      canonicalEffects: input.canonicalEffects,
+    },
+  };
+}
+
+function topValues(projection: PatternSemanticProjection, path: keyof PatternSemanticProjection["formativeStructure"] | keyof PatternSemanticProjection["semanticMaterial"] | "colorClimate") {
+  if (path === "colorClimate") {
+    return projection.atmosphericSurface.colorClimate.map((item) => item.value);
+  }
+  if (path in projection.formativeStructure) {
+    return projection.formativeStructure[path as keyof PatternSemanticProjection["formativeStructure"]].map((item) => item.value);
+  }
+  return projection.semanticMaterial[path as keyof PatternSemanticProjection["semanticMaterial"]].map((item) => item.value);
+}
+
+function deriveSlotDrivenComparisonCandidates(input: {
+  queryText: string;
+  queryRoute: QueryRouteDecision;
+  interpretation: InterpretationLayerResult;
+  retrievalLayer?: RetrievalLayerResult;
+}): { comparisonCandidates: ComparisonCandidate[]; retrievalMatches: SemanticRetrievalMatchResult[] } {
+  const fallback = fallbackComparisonCandidatesForPath(input.queryRoute.recommendedInterpretationPath);
+  const retrievalMatches = (input.retrievalLayer?.comparisonCandidates ?? [])
+    .map((item) => ({
+      id: item.id,
+      text: item.text,
+      score: item.score,
+      source: item.source as SemanticRetrievalMatchResult["source"],
+    }));
+  const roles = input.interpretation.semanticRoles;
+  const projection = input.interpretation.patternSemanticProjection;
+  const unresolved = input.interpretation.unresolvedSplits;
+  const slotDerived: ComparisonCandidate[] = [];
+
+  if (unresolved.some((item) => item.id === "base-atmosphere-vs-accent-motif")) {
+    slotDerived.push(
+      createDerivedComparison({
+        id: "slot-base-atmosphere",
+        groupId: "slot-derived",
+        intendedSplitDimension: "base-atmosphere-priority",
+        text: `更偏把 ${roles.baseAtmosphere[0]?.label ?? "空气和气氛"} 放在最前面，先保住整体被风和留白洗过的底子。`,
+        delta: "raise atmosphere priority; keep motif trace secondary",
+        derivedFrom: ["unresolved:base-atmosphere-vs-accent-motif", ...(input.interpretation.unresolvedSplits[0]?.derivedFrom ?? [])],
+        targetField: "overallImpression",
+        targetSlot: "impression",
+        path: input.queryRoute.recommendedInterpretationPath,
+        canonicalEffects: {
+          atmosphereQualities: [roles.baseAtmosphere[0]?.label ?? "atmosphere-first"],
+          presenceQualities: ["low motif presence"],
+        },
+      }),
+      createDerivedComparison({
+        id: "slot-accent-motif",
+        groupId: "slot-derived",
+        intendedSplitDimension: "accent-motif-priority",
+        text: `更偏把 ${roles.accentMotif[0]?.label ?? "那一点母题痕迹"} 轻轻提出来，但仍只保留在组织和轮廓层。`,
+        delta: "raise motif trace presence while keeping anti-literal bias",
+        derivedFrom: ["unresolved:base-atmosphere-vs-accent-motif", ...(input.interpretation.unresolvedSplits[0]?.derivedFrom ?? [])],
+        targetField: "patternTendency",
+        targetSlot: "motif",
+        path: input.queryRoute.recommendedInterpretationPath,
+        canonicalEffects: {
+          patternQualities: [roles.accentMotif[0]?.label ?? "motif-trace"],
+          presenceQualities: ["controlled motif visibility"],
+        },
+      }),
+    );
+  }
+
+  if (unresolved.some((item) => item.id === "diffused-scent-vs-trace-retention")) {
+    slotDerived.push(
+      createDerivedComparison({
+        id: "slot-sensory-diffusion",
+        groupId: "slot-derived",
+        intendedSplitDimension: "sensory-diffusion",
+        text: `更偏让 ${roles.sensoryModifiers[0]?.label ?? "气味和气息"} 融进空气里，不立成对象，只留下轻微挥发和扩散。`,
+        delta: "favor diffusion and evaporation over object readability",
+        derivedFrom: ["unresolved:diffused-scent-vs-trace-retention", ...(input.interpretation.unresolvedSplits.find((item) => item.id === "diffused-scent-vs-trace-retention")?.derivedFrom ?? [])],
+        targetField: "overallImpression",
+        targetSlot: "impression",
+        path: input.queryRoute.recommendedInterpretationPath,
+        canonicalEffects: {
+          atmosphereQualities: ["diffused sensory air"],
+          patternQualities: ["soft diffusion"],
+        },
+      }),
+      createDerivedComparison({
+        id: "slot-trace-retention",
+        groupId: "slot-derived",
+        intendedSplitDimension: "trace-retention",
+        text: `更偏局部留一点 ${roles.accentMotif[0]?.label ?? "叶感或轮廓痕迹"}，让它被看见，但不走到插画化。`,
+        delta: "retain local trace without literal scenic rendering",
+        derivedFrom: ["unresolved:diffused-scent-vs-trace-retention", ...(input.interpretation.unresolvedSplits.find((item) => item.id === "diffused-scent-vs-trace-retention")?.derivedFrom ?? [])],
+        targetField: "patternTendency",
+        targetSlot: "motif",
+        path: input.queryRoute.recommendedInterpretationPath,
+        canonicalEffects: {
+          patternQualities: ["outline-retention"],
+          presenceQualities: ["local-focus"],
+        },
+      }),
+    );
+  }
+
+  if (slotDerived.length === 0 && input.queryRoute.detectedType === "poetic-atmospheric") {
+    const flows = topValues(projection, "flowDirection");
+    const colors = topValues(projection, "colorClimate");
+    slotDerived.push(
+      createDerivedComparison({
+        id: "slot-atmosphere-clarity",
+        groupId: "slot-derived",
+        intendedSplitDimension: "clarity-and-air",
+        text: `更偏把空气擦得更薄一点，留下 ${colors[0] ?? "清透的亮"}，而不是让雾层变厚。`,
+        delta: "raise clarity and thin-air brightness",
+        derivedFrom: [...projection.atmosphericSurface.colorClimate.map((item) => `slot:${item.value}`)],
+        targetField: "colorMood",
+        targetSlot: "color",
+        path: input.queryRoute.recommendedInterpretationPath,
+        canonicalEffects: { colorQualities: [colors[0] ?? "thin-air clarity"] },
+      }),
+      createDerivedComparison({
+        id: "slot-atmosphere-flow",
+        groupId: "slot-derived",
+        intendedSplitDimension: "flow-direction",
+        text: `更偏保住 ${flows[0] ?? "轻微流向"}，让气息像在表面慢慢漂移，而不是整片静止。`,
+        delta: "raise directional drift and flow",
+        derivedFrom: [...projection.formativeStructure.flowDirection.map((item) => `slot:${item.value}`)],
+        targetField: "arrangementTendency",
+        targetSlot: "arrangement",
+        path: input.queryRoute.recommendedInterpretationPath,
+        canonicalEffects: { arrangementQualities: [flows[0] ?? "directional drift"] },
+      }),
+    );
+  }
+
+  if (slotDerived.length === 0 && input.queryRoute.detectedType === "explicit-motif") {
+    slotDerived.push(
+      createDerivedComparison({
+        id: "slot-motif-trace",
+        groupId: "slot-derived",
+        intendedSplitDimension: "trace-strength",
+        text: "更偏只留痕迹，让母题退到后面，只剩图案语言里的轻微回声。",
+        delta: "keep motif as residual trace",
+        derivedFrom: [...projection.semanticMaterial.motifFamily.map((item) => `slot:${item.value}`), ...roles.accentMotif.map((item) => item.id)],
+        targetField: "patternTendency",
+        targetSlot: "motif",
+        path: input.queryRoute.recommendedInterpretationPath,
+        canonicalEffects: { patternQualities: ["trace-strength"], presenceQualities: ["controlled motif visibility"] },
+      }),
+      createDerivedComparison({
+        id: "slot-motif-outline",
+        groupId: "slot-derived",
+        intendedSplitDimension: "outline-retention",
+        text: "更偏留一点轮廓，让人能感觉到原来是什么，但不走到具象描写。",
+        delta: "retain weak outline; stay anti-literal",
+        derivedFrom: [...projection.semanticMaterial.motifFamily.map((item) => `slot:${item.value}`), ...roles.accentMotif.map((item) => item.id)],
+        targetField: "patternTendency",
+        targetSlot: "motif",
+        path: input.queryRoute.recommendedInterpretationPath,
+        canonicalEffects: { patternQualities: ["outline-retention"], presenceQualities: ["controlled motif visibility"] },
+      }),
+    );
+  }
+
+  if (slotDerived.length >= 2) {
+    return {
+      comparisonCandidates: slotDerived.slice(0, 4),
+      retrievalMatches,
+    };
+  }
+
+  if (retrievalMatches.length > 0) {
+    return {
+      comparisonCandidates: composeComparisonCandidatesFromRetrieval({
+        query: input.queryText,
+        matches: retrievalMatches,
+        preferredPath: input.queryRoute.recommendedInterpretationPath,
+      }),
+      retrievalMatches,
+    };
+  }
+
+  return {
+    comparisonCandidates: fallback,
+    retrievalMatches: [],
+  };
+}
+
+function shouldAskQuestion(input: {
+  queryRoute: QueryRouteDecision;
+  selectedQuestion?: NextQuestionCandidate;
+  comparisonCandidates: ComparisonCandidate[];
+  comparisonSelections?: ComparisonSelectionRecord[];
+}) {
+  if (!input.selectedQuestion) {
+    return false;
+  }
+
+  if (input.queryRoute.detectedType === "vague-underspecified") {
+    return false;
+  }
+
+  if ((input.comparisonSelections?.length ?? 0) >= 2) {
+    return false;
+  }
+
+  return input.comparisonCandidates.length > 0;
+}
+
+function buildComparisonLedFollowUp(input: {
+  queryRoute: QueryRouteDecision;
+  interpretation?: InterpretationLayerResult;
+  comparisonCandidates: ComparisonCandidate[];
+  selectedQuestion?: NextQuestionCandidate;
+  answerAlignment?: AnswerAlignment;
+  comparisonSelections?: ComparisonSelectionRecord[];
+}) {
+  const preferred = input.comparisonSelections?.filter((item) => item.mode === "prefer") ?? [];
+  const first = input.comparisonCandidates[0];
+  const second = input.comparisonCandidates[1];
+  const unresolved = input.interpretation?.unresolvedSplits[0];
+
+  if (unresolved) {
+    return unresolved.prompt;
+  }
+
+  if (input.selectedQuestion?.targetField === "colorMood") {
+    if (input.queryRoute.detectedType === "mixed-compositional") {
+      return "这一步我更想确认的是：颜色要融在烟雨里，还是要让一点亮度轻轻浮出来？";
+    }
+    return "这一轮更值钱的一道分叉是：颜色要被轻轻看见一点，还是继续退到空气里不直接跳出来？";
+  }
+
+  if (input.selectedQuestion?.targetField === "arrangementTendency") {
+    return "接下来我更想分清的是：整体排布要更松一点有呼吸，还是再收住一点，不让画面散开？";
+  }
+
+  if (input.selectedQuestion?.targetField === "overallImpression") {
+    return "这里我更想确认的是：整体先往安静收，还是还要保一点轻微存在感？";
+  }
+
+  if (input.queryRoute.detectedType === "poetic-atmospheric") {
+    if (preferred.some((item) => item.candidateId === "atmosphere-humidity-suspended")) {
+      return "你更想保住潮气悬着的空气，还是让边界再压低一点？";
+    }
+    return "这里我更想确认的是：你更靠近潮气悬着，还是更靠近边界被压低？";
+  }
+
+  if (input.queryRoute.detectedType === "explicit-motif") {
+    if (preferred.some((item) => item.candidateId === "motif-outline-hint")) {
+      return "这一步我只想确认：你要的是留一点轮廓，还是让它再可辨认一点？";
+    }
+    return "这里真正要分清的是：你更想只留痕迹，还是还要保一点轮廓？";
+  }
+
+  if (input.queryRoute.detectedType === "mixed-compositional") {
+    return "接下来最值钱的一道分叉是：你更想保住烟雨的空气，还是让竹影再清楚一点？";
+  }
+
+  if (input.queryRoute.detectedType === "constraint-negation") {
+    return "边界先收住以后，你更想让它融进去，还是只在局部轻轻浮出来一点？";
+  }
+
+  if (first && second) {
+    return `你更靠近“${first.intendedSplitDimension}”还是“${second.intendedSplitDimension}”？`;
+  }
+
+  return undefined;
+}
+
+function buildDisplayPlan(input: {
+  queryText: string;
+  queryRoute: QueryRouteDecision;
+  interpretation?: InterpretationLayerResult;
+  semanticCanvas?: EntryAgentResult["semanticCanvas"];
+  hitFields: EntryAgentResult["hitFields"];
+  selectedQuestion?: NextQuestionCandidate;
+  answerAlignment?: AnswerAlignment;
+  comparisonCandidates: ComparisonCandidate[];
+  retrievalMatches: SemanticRetrievalMatchResult[];
+  comparisonSelections?: ComparisonSelectionRecord[];
+}): DisplayPlan {
+  const comparisonCandidates = input.comparisonCandidates;
+  const whetherToAskQuestion = shouldAskQuestion({
+    queryRoute: input.queryRoute,
+    selectedQuestion: input.selectedQuestion,
+    comparisonCandidates,
+    comparisonSelections: input.comparisonSelections,
+  });
+  const followUpQuestion = whetherToAskQuestion
+    ? buildComparisonLedFollowUp({
+        queryRoute: input.queryRoute,
+        interpretation: input.interpretation,
+        comparisonCandidates,
+        selectedQuestion: input.selectedQuestion,
+        answerAlignment: input.answerAlignment,
+        comparisonSelections: input.comparisonSelections,
+      })
+    : undefined;
+
+  return {
+    replySnapshot: buildReplySnapshot(input),
+    comparisonCandidates,
+    whetherToAskQuestion,
+    followUpQuestion,
+    plannerTrace: [
+      `route=${input.queryRoute.detectedType}`,
+      `path=${input.queryRoute.recommendedInterpretationPath}`,
+      `comparison-groups=${[...new Set(comparisonCandidates.map((item) => item.groupId))].join(",") || "none"}`,
+      ...(input.interpretation?.patternSemanticProjection.slotTrace ?? []),
+      `unresolved=${input.interpretation?.unresolvedSplits.map((item) => item.id).join(",") || "none"}`,
+      `comparison-retrieval=${input.retrievalMatches.length > 0 ? input.retrievalMatches.map((item) => item.id).join(",") : "fallback"}`,
+      `comparison-selections=${input.comparisonSelections?.map((item) => `${item.candidateId}:${item.mode}`).join(",") || "none"}`,
+      `ask=${whetherToAskQuestion ? "yes" : "no"}`,
+    ],
+  };
+}
+
 function buildRuleBasedAnswerAlignment(input: {
   previousQuestion?: QuestionTrace;
   bridge: Pick<EntryAgentResult, "semanticCanvas">;
@@ -465,17 +840,23 @@ function applyCoverageBalance(
 }
 
 export async function buildQuestionPlan(input: {
+  queryText: string;
   semanticGaps: SemanticGap[];
   previousQuestion?: QuestionTrace;
   questionHistory?: QuestionTrace[];
   bridge: Pick<EntryAgentResult, "semanticCanvas">;
   hitFields: EntryAgentResult["hitFields"];
+  interpretation: InterpretationLayerResult;
+  queryRoute: QueryRouteDecision;
+  retrievalLayer?: RetrievalLayerResult;
+  comparisonSelections?: ComparisonSelectionRecord[];
   latestReplyText?: string;
   resolutionState?: QuestionResolutionState;
   latestResolution?: QuestionResolution;
 }): Promise<{
   questionCandidates: NextQuestionCandidate[];
   questionPlan?: QuestionPlan;
+  displayPlan: DisplayPlan;
   resolutionState?: QuestionResolutionState;
 }> {
   const rawCandidates = input.semanticGaps.map(buildCandidate).sort((left, right) => right.priority - left.priority);
@@ -494,6 +875,13 @@ export async function buildQuestionPlan(input: {
       return true;
     }
     const familyResolution = resolutionState.families[candidate.questionFamilyId];
+    if (
+      input.previousQuestion?.questionFamilyId &&
+      candidate.questionFamilyId === input.previousQuestion.questionFamilyId &&
+      (familyResolution?.status === "resolved" || familyResolution?.status === "narrowed")
+    ) {
+      return false;
+    }
     return familyResolution?.status !== "resolved";
   });
   const questionCandidates = rerankQuestionCandidates({
@@ -506,17 +894,46 @@ export async function buildQuestionPlan(input: {
     previousQuestion: input.previousQuestion,
     answerAlignment,
   });
+  const { comparisonCandidates, retrievalMatches } = deriveSlotDrivenComparisonCandidates({
+    queryText: input.queryText,
+    queryRoute: input.queryRoute,
+    interpretation: input.interpretation,
+    retrievalLayer: input.retrievalLayer,
+  });
 
   if (!selectedQuestion) {
     return {
       questionCandidates,
       questionPlan: undefined,
+      displayPlan: buildDisplayPlan({
+        queryText: input.queryText,
+        queryRoute: input.queryRoute,
+        interpretation: input.interpretation,
+        semanticCanvas: input.bridge.semanticCanvas,
+        hitFields: input.hitFields,
+        answerAlignment,
+        comparisonCandidates,
+        retrievalMatches,
+        comparisonSelections: input.comparisonSelections,
+      }),
       resolutionState,
     };
   }
 
   return {
     questionCandidates,
+    displayPlan: buildDisplayPlan({
+      queryText: input.queryText,
+      queryRoute: input.queryRoute,
+      interpretation: input.interpretation,
+      semanticCanvas: input.bridge.semanticCanvas,
+      hitFields: input.hitFields,
+      selectedQuestion,
+      answerAlignment,
+      comparisonCandidates,
+      retrievalMatches,
+      comparisonSelections: input.comparisonSelections,
+    }),
     resolutionState,
     questionPlan: {
       selectedGapId: selectedQuestion.resolvesGapIds[0],

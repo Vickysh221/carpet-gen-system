@@ -1,7 +1,7 @@
 import { OPENING_OPTION_REGISTRY } from "./openingOptionRegistry.ts";
 import { POETIC_MAPPINGS } from "./poeticMappings.ts";
 
-export type SemanticCandidateSource = "poeticMappings" | "openingOptions" | "explicitMotifs";
+export type SemanticCandidateSource = "poeticMappings" | "openingOptions" | "explicitMotifs" | "comparisonLibrary";
 
 export interface SemanticCandidate {
   id: string;

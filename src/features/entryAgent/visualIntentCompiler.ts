@@ -547,6 +547,7 @@ function buildTraceBundle(input: VisualIntentCompilerInput): TraceBundle {
   return {
     freeTextInputs: input.freeTextInputs ?? (analysis.agentState?.cumulativeText ? analysis.agentState.cumulativeText.split("\n").filter(Boolean) : []),
     selectedOptions: input.selectedOptions ?? [],
+    comparisonSelections: input.comparisonSelections ?? [],
     turnHistory: input.turnHistory ?? [],
     poeticHits: unique(analysis.semanticCanvas?.poeticSignal?.hits.map((hit) => hit.matchedText) ?? []),
     sourceNotes: unique([
@@ -558,6 +559,191 @@ function buildTraceBundle(input: VisualIntentCompilerInput): TraceBundle {
       .sort((left, right) => right.sourceTurn - left.sourceTurn)
       .map((item) => cleanDiagnosticText(item.reason))
       .slice(0, 4),
+  };
+}
+
+function applyComparisonSelectionsToCanonicalState(
+  state: CanonicalIntentState,
+  selections: VisualIntentCompilerInput["comparisonSelections"] = [],
+): CanonicalIntentState {
+  if (selections.length === 0) {
+    return state;
+  }
+
+  const preferred = selections.filter((item) => item.mode === "prefer");
+  const rejected = selections.filter((item) => item.mode === "reject");
+
+  const impressionQualities = uniqueStrings(preferred.flatMap((item) => item.selectionEffect.canonicalEffects?.atmosphereQualities ?? []));
+  const patternQualities = uniqueStrings(preferred.flatMap((item) => item.selectionEffect.canonicalEffects?.patternQualities ?? []));
+  const colorQualities = uniqueStrings(preferred.flatMap((item) => item.selectionEffect.canonicalEffects?.colorQualities ?? []));
+  const arrangementQualities = uniqueStrings(preferred.flatMap((item) => item.selectionEffect.canonicalEffects?.arrangementQualities ?? []));
+  const keepQualities = uniqueStrings(preferred.map((item) => item.selectionEffect.patchHint));
+  const avoidQualities = uniqueStrings(rejected.map((item) => item.selectionEffect.patchHint));
+  const comparisonTraces = selections.map((item) => `comparison:${item.candidateId}:${item.mode}`);
+
+  return {
+    ...state,
+    impression: state.impression
+      ? {
+          ...state.impression,
+          value: {
+            ...state.impression.value,
+            primary: uniqueStrings([...(state.impression.value.primary ?? []), ...impressionQualities]),
+          },
+          sources: unique([...state.impression.sources, "planner_bridge"]),
+          traces: unique([...state.impression.traces, ...comparisonTraces]),
+        }
+      : state.impression,
+    color: state.color
+      ? {
+          ...state.color,
+          value: {
+            ...state.color.value,
+            paletteBias: uniqueStrings([...(state.color.value.paletteBias ?? []), ...colorQualities]),
+          },
+          sources: unique([...state.color.sources, "planner_bridge"]),
+          traces: unique([...state.color.traces, ...comparisonTraces]),
+        }
+      : state.color,
+    pattern: state.pattern
+      ? {
+          ...state.pattern,
+          value: {
+            ...state.pattern.value,
+            atmosphericPattern: uniqueStrings([...(state.pattern.value.atmosphericPattern ?? []), ...patternQualities]),
+            structuralPattern: uniqueStrings([...(state.pattern.value.structuralPattern ?? []), ...arrangementQualities]),
+          },
+          sources: unique([...state.pattern.sources, "planner_bridge"]),
+          traces: unique([...state.pattern.traces, ...comparisonTraces]),
+        }
+      : state.pattern,
+    constraints: state.constraints
+      ? {
+          ...state.constraints,
+          value: {
+            ...state.constraints.value,
+            keepQualities: unique([...(state.constraints.value.keepQualities ?? []), ...keepQualities]),
+            avoidComposition: unique([...(state.constraints.value.avoidComposition ?? []), ...avoidQualities]),
+          },
+          sources: unique([...state.constraints.sources, "planner_bridge"]),
+          traces: unique([...state.constraints.traces, ...comparisonTraces]),
+        }
+      : state.constraints,
+  };
+}
+
+function applyPatternSemanticProjectionToCanonicalState(
+  state: CanonicalIntentState,
+  analysis: EntryAgentResult,
+): CanonicalIntentState {
+  const projection = analysis.interpretationLayer?.patternSemanticProjection;
+  const unresolved = analysis.interpretationLayer?.unresolvedSplits ?? [];
+  const misleading = analysis.interpretationLayer?.misleadingPathsToAvoid ?? [];
+  if (!projection) {
+    return state;
+  }
+
+  const architecture = projection.formativeStructure.patternArchitecture.map((item) => item.value);
+  const order = projection.formativeStructure.structuralOrder.map((item) => item.value);
+  const density = projection.formativeStructure.densityBreathing.map((item) => item.value);
+  const flow = projection.formativeStructure.flowDirection.map((item) => item.value);
+  const motifFamily = projection.semanticMaterial.motifFamily.map((item) => item.value);
+  const abstraction = projection.semanticMaterial.abstractionLevel[0]?.value;
+  const anchorStrength = projection.semanticMaterial.semanticAnchorStrength.map((item) => item.value);
+  const colorClimate = projection.atmosphericSurface.colorClimate.map((item) => item.value);
+  const slotTrace = projection.slotTrace.map((item) => `pattern-slot:${item}`);
+
+  return {
+    ...state,
+    impression: state.impression
+      ? {
+          ...state.impression,
+          value: {
+            ...state.impression.value,
+            primary: uniqueStrings([...(state.impression.value.primary ?? []), ...projection.anchorHints]),
+          },
+          sources: unique([...state.impression.sources, "semantic_inference"]),
+          traces: unique([...state.impression.traces, ...slotTrace]),
+        }
+      : state.impression,
+    color: state.color
+      ? {
+          ...state.color,
+          value: {
+            ...state.color.value,
+            paletteBias: uniqueStrings([...(state.color.value.paletteBias ?? []), ...colorClimate]),
+          },
+          sources: unique([...state.color.sources, "semantic_inference"]),
+          traces: unique([...state.color.traces, ...slotTrace]),
+        }
+      : state.color,
+    pattern: state.pattern
+      ? {
+          ...state.pattern,
+          value: {
+            ...state.pattern.value,
+            abstraction: (abstraction === "ambient" ? "abstract" : abstraction === "suggestive" ? "semi-abstract" : state.pattern.value.abstraction),
+            density: density.includes("sparse") || density.includes("breathing_gradient")
+              ? "low"
+              : density.includes("clustered_sparse")
+                ? "medium-low"
+                : state.pattern.value.density,
+            motion: flow.includes("upward_evaporation")
+              ? "gentle-flow"
+              : flow.length > 0
+                ? "directional-flow"
+                : state.pattern.value.motion,
+            renderingMode: abstraction === "ambient" || abstraction === "suggestive" ? "suggestive" : state.pattern.value.renderingMode,
+            structuralPattern: uniqueStrings([...(state.pattern.value.structuralPattern ?? []), ...architecture, ...order]),
+            atmosphericPattern: uniqueStrings([...(state.pattern.value.atmosphericPattern ?? []), ...flow, ...projection.variantHints]),
+            keyElements: uniqueStrings([...(state.pattern.value.keyElements ?? []), ...motifFamily, ...anchorStrength]),
+          },
+          sources: unique([...state.pattern.sources, "semantic_inference"]),
+          traces: unique([...state.pattern.traces, ...slotTrace]),
+        }
+      : state.pattern,
+    arrangement: state.arrangement
+      ? {
+          ...state.arrangement,
+          value: {
+            ...state.arrangement.value,
+            spread: density.includes("sparse") || density.includes("breathing_gradient") ? "airy" : state.arrangement.value.spread,
+            directionalFlow: flow.length > 0 ? "gentle" : state.arrangement.value.directionalFlow,
+            orderliness: order.includes("hidden_grid") ? "balanced" : state.arrangement.value.orderliness,
+          },
+          sources: unique([...state.arrangement.sources, "semantic_inference"]),
+          traces: unique([...state.arrangement.traces, ...slotTrace]),
+        }
+      : state.arrangement,
+    constraints: state.constraints
+      ? {
+          ...state.constraints,
+          value: {
+            ...state.constraints.value,
+            avoidComposition: unique([
+              ...(state.constraints.value.avoidComposition ?? []),
+              ...projection.constraintHints,
+              ...misleading,
+            ]),
+            keepQualities: unique([...(state.constraints.value.keepQualities ?? []), ...projection.anchorHints]),
+          },
+          sources: unique([...state.constraints.sources, "semantic_inference"]),
+          traces: unique([...state.constraints.traces, ...slotTrace]),
+        }
+      : state.constraints,
+    unresolvedSplits: unique(
+      [
+        ...state.unresolvedSplits.map((item) => JSON.stringify(item)),
+        ...unresolved.map((item) =>
+          JSON.stringify({
+            id: item.id,
+            slot: item.dimension,
+            question: item.prompt,
+            reason: item.rationale,
+          }),
+        ),
+      ],
+    ).map((item) => JSON.parse(item)),
   };
 }
 
@@ -702,7 +888,7 @@ export function buildCanonicalIntentState(input: VisualIntentCompilerInput): Can
   const arrangement = buildArrangementState(analysis);
   const materiality = buildMaterialityState(analysis);
 
-  return applyRetrievalBridgeToCanonicalState({
+  return applyComparisonSelectionsToCanonicalState(applyPatternSemanticProjectionToCanonicalState(applyRetrievalBridgeToCanonicalState({
     atmosphere: createSourcedValue({
       value: atmosphere,
       confidence: Math.max(getSlotScore(analysis, "impression"), semanticMapping.confidenceSummary.macroSlotCoverage.presence),
@@ -768,7 +954,7 @@ export function buildCanonicalIntentState(input: VisualIntentCompilerInput): Can
     }),
     unresolvedSplits: buildUnresolvedSplits(analysis),
     readiness,
-  }, retrievalOutputs);
+  }, retrievalOutputs), analysis), input.comparisonSelections);
 }
 
 function mergeSemanticSpecs(baseSpec: GenerationSemanticSpec, retrievalOutputs: RetrievalBridgeOutput[]): GenerationSemanticSpec {

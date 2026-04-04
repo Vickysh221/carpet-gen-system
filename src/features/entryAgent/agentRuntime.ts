@@ -1,5 +1,7 @@
 import { analyzeEntryText } from "./index";
+import { normalizeTextInputEvent } from "./inputLayer";
 import { applyOpeningSelectionToAgentState } from "./openingOptionDelta";
+import { routeEntryQuery } from "./queryRouting";
 import type {
   AgentNextAction,
   AgentStateUpdateSource,
@@ -556,6 +558,7 @@ export function buildDerivedEntryAnalysisFromAgentState(agentState: IntentIntake
     .sort((left, right) => right.sourceTurn - left.sourceTurn)[0];
 
   return {
+    queryRoute: routeEntryQuery(normalizeTextInputEvent(agentState.cumulativeText)),
     hitFields,
     evidence: {},
     confidence: {},
@@ -780,6 +783,7 @@ export function createIntentIntakeAgentState(seed: Partial<IntentIntakeAgentStat
     questionHistory: seed.questionHistory ?? [],
     latestSemanticMapping: seed.latestSemanticMapping,
     latestAnalysis: seed.latestAnalysis,
+    comparisonSelections: seed.comparisonSelections ?? [],
     nextAction: seed.nextAction,
     lastSignalType: seed.lastSignalType,
   };
@@ -807,7 +811,7 @@ function appendQuestionTraceIfNeeded(input: {
 function buildNextAgentState(input: {
   analysis: EntryAgentResult;
   currentState: IntentIntakeAgentState;
-  signal: TextIntakeSignal;
+  signal: Pick<IntakeSignal, "type"> & { text?: string };
   cumulativeText: string;
 }): IntentIntakeAgentState {
   const nextTurnIndex = input.currentState.turnIndex + 1;
@@ -827,7 +831,7 @@ function buildNextAgentState(input: {
   const transitionedSlots = applySoftLockTransitions({
     slots,
     currentState: input.currentState,
-    latestReplyText: input.signal.text,
+    latestReplyText: input.signal.text ?? "",
   });
   const goalState = syncGoalStateAfterTransitions({
     goalState: input.analysis.intakeGoalState,
@@ -848,6 +852,7 @@ function buildNextAgentState(input: {
     questionHistory: nextQuestionHistory,
     latestSemanticMapping: buildIntentSemanticMappingFromAnalysis(input.analysis),
     latestAnalysis: input.analysis,
+    comparisonSelections: input.currentState.comparisonSelections,
     lastSignalType: input.signal.type,
   };
 }
@@ -871,6 +876,34 @@ export async function updateAgentStateFromSignal(
     return {
       ...nextState,
       turnIndex: Math.max(state.turnIndex, signal.turnIndex),
+      comparisonSelections: state.comparisonSelections,
+      nextAction: decideNextAction(nextState),
+      lastSignalType: signal.type,
+    };
+  }
+
+  if (signal.type === "comparison-selection") {
+    const comparisonSelections = [...state.comparisonSelections, signal.selection].slice(-12);
+    const analysis = await analyzeEntryText({
+      text: state.cumulativeText,
+      slotStates: deriveLegacySlotStates(state),
+      previousQuestionTrace: state.questionHistory[state.questionHistory.length - 1],
+      resolutionState: state.resolutionState,
+      previousGoalState: state.goalState,
+      questionHistory: state.questionHistory,
+      comparisonSelections,
+    });
+
+    const nextState = buildNextAgentState({
+      analysis,
+      currentState: { ...state, comparisonSelections },
+      signal,
+      cumulativeText: state.cumulativeText,
+    });
+
+    return {
+      ...nextState,
+      comparisonSelections,
       nextAction: decideNextAction(nextState),
       lastSignalType: signal.type,
     };
@@ -889,6 +922,7 @@ export async function updateAgentStateFromSignal(
     resolutionState: state.resolutionState,
     previousGoalState: state.goalState,
     questionHistory: state.questionHistory,
+    comparisonSelections: state.comparisonSelections,
   });
 
   return buildNextAgentState({

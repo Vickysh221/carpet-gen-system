@@ -190,7 +190,7 @@ export type SemanticRetrievalMatchResult = {
   id: string;
   text: string;
   score: number;
-  source: "poeticMappings" | "openingOptions" | "explicitMotifs";
+  source: "poeticMappings" | "openingOptions" | "explicitMotifs" | "comparisonLibrary";
 };
 
 type ApiLlmFallbackCandidate = {

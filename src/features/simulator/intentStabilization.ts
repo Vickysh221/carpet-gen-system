@@ -1,4 +1,4 @@
-import { buildDerivedEntryAnalysisFromAgentState, type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeAgentState, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
+import { buildDerivedEntryAnalysisFromAgentState, type ComparisonCandidate, type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeAgentState, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
 import { processIntakeSignal } from "@/features/entryAgent/signalProcessor";
 import { renderPersonaUnderstanding } from "./personaRenderer";
 import { buildUnderstandingSummary, renderUnderstandingSummary } from "./understandingSummary";
@@ -34,7 +34,7 @@ interface IntentConversationState {
 export interface ExpertDialogueTurn {
   id: string;
   turnIndex: number;
-  source: "text" | "opening-selection";
+  source: "text" | "opening-selection" | "comparison-selection";
   userText: string;
   expertReply: string;
   nextQuestion: string;
@@ -43,8 +43,10 @@ export interface ExpertDialogueTurn {
 interface IntentUnderstandingSnapshot {
   text: string;
   analysis: EntryAgentResult;
+  replySnapshot: string;
+  comparisonCandidates: ComparisonCandidate[];
   currentUnderstanding: string;
-  followUpQuestion: string;
+  followUpQuestion?: string;
   expertReply: string;
   readyToGenerate: boolean;
   turnCount: number;
@@ -503,15 +505,16 @@ function buildQuestionLead(input: {
 }
 
 function buildExpertReply(input: {
-  source: "text" | "opening-selection";
+  source: "text" | "opening-selection" | "comparison-selection";
   userText: string;
   analysis: EntryAgentResult;
   cumulativeCanvas?: FuliSemanticCanvas;
   answerAlignment?: AnswerAlignment;
-  nextQuestion: string;
+  nextQuestion?: string;
 }) {
+  const nextQuestion = input.nextQuestion ? trimQuestionPrompt(input.nextQuestion) : undefined;
   const lines =
-    input.source === "opening-selection"
+    input.source !== "text"
       ? [
           buildChoiceInterpretationSentence({
             userText: input.userText,
@@ -519,18 +522,20 @@ function buildExpertReply(input: {
             cumulativeCanvas: input.cumulativeCanvas,
           }),
           buildChoiceEffectSentence(input.analysis),
-          `我现在只想先确认这一件事：${trimQuestionPrompt(input.nextQuestion)}`,
-        ]
+          nextQuestion ? `我现在只想先确认这一件事：${nextQuestion}` : undefined,
+        ].filter((item): item is string => Boolean(item))
       : [
           buildSnapshotSentence({
             analysis: input.analysis,
             cumulativeCanvas: input.cumulativeCanvas,
           }),
-          `${buildQuestionLead({
-            analysis: input.analysis,
-            answerAlignment: input.answerAlignment,
-          })}${trimQuestionPrompt(input.nextQuestion)}`,
-          buildQuestionConsequence(input.analysis),
+          nextQuestion
+            ? `${buildQuestionLead({
+                analysis: input.analysis,
+                answerAlignment: input.answerAlignment,
+              })}${nextQuestion}`
+            : undefined,
+          nextQuestion ? buildQuestionConsequence(input.analysis) : undefined,
         ].filter((item): item is string => Boolean(item));
 
   return lines.join(" ");
@@ -593,7 +598,12 @@ export async function buildIntentStabilizationSnapshot({
   };
   const cumulativeCanvas = mergeSemanticCanvas(previousSnapshot?.conversationState.cumulativeCanvas, analysis.semanticCanvas);
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
-  const selectedPrompt = analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
+  const selectedPrompt = analysis.displayPlan?.followUpQuestion ?? analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
+  const replySnapshot = analysis.displayPlan?.replySnapshot ?? buildSnapshotSentence({
+    analysis,
+    cumulativeCanvas,
+  });
+  const comparisonCandidates = analysis.displayPlan?.comparisonCandidates ?? [];
   const currentUnderstanding = buildCumulativeUnderstanding({
     analysis,
     cumulativeCanvas,
@@ -606,7 +616,7 @@ export async function buildIntentStabilizationSnapshot({
     analysis,
     cumulativeCanvas,
     answerAlignment,
-    nextQuestion: selectedPrompt,
+    nextQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
   });
   const nextQuestionHistory = analysis.agentState?.questionHistory ?? previousQuestionHistory;
   const conversationState: IntentConversationState = {
@@ -640,8 +650,10 @@ export async function buildIntentStabilizationSnapshot({
   return {
     text,
     analysis,
+    replySnapshot,
+    comparisonCandidates,
     currentUnderstanding,
-    followUpQuestion: selectedPrompt,
+    followUpQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
     expertReply,
     readyToGenerate,
     turnCount,
@@ -656,7 +668,7 @@ export function buildIntentStabilizationSnapshotFromAgentState(input: {
   previousTurnCount?: number;
   currentAgentState: IntentIntakeAgentState;
   committedReplyText?: string;
-  source?: "text" | "opening-selection";
+  source?: "text" | "opening-selection" | "comparison-selection";
 }): IntentUnderstandingSnapshot {
   const turnCount = Math.min((input.previousTurnCount ?? 0) + 1, HARD_TURN_CAP);
   const analysis = buildDerivedEntryAnalysisFromAgentState(input.currentAgentState);
@@ -664,12 +676,17 @@ export function buildIntentStabilizationSnapshotFromAgentState(input: {
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
   const committedText = input.committedReplyText?.trim() ?? "";
   const text = committedText ? joinUserTexts(input.previousText, committedText) : (input.previousText ?? "");
-  const selectedPrompt = analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
+  const selectedPrompt = analysis.displayPlan?.followUpQuestion ?? analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
   const answerAlignment = {
     status: "initial" as const,
     introducedFields: analysis.hitFields,
     note: "这一轮通过 opening 选项先建立了主方向。",
   };
+  const replySnapshot = analysis.displayPlan?.replySnapshot ?? buildSnapshotSentence({
+    analysis,
+    cumulativeCanvas,
+  });
+  const comparisonCandidates = analysis.displayPlan?.comparisonCandidates ?? [];
   const currentUnderstanding = buildCumulativeUnderstanding({
     analysis,
     cumulativeCanvas,
@@ -682,14 +699,16 @@ export function buildIntentStabilizationSnapshotFromAgentState(input: {
     analysis,
     cumulativeCanvas,
     answerAlignment,
-    nextQuestion: selectedPrompt,
+    nextQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
   });
 
   return {
     text,
     analysis,
+    replySnapshot,
+    comparisonCandidates,
     currentUnderstanding,
-    followUpQuestion: selectedPrompt,
+    followUpQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
     expertReply,
     readyToGenerate,
     turnCount,

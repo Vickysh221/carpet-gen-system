@@ -45,6 +45,30 @@ export async function processIntakeSignal(
       };
     }
 
+    case "comparison-selection": {
+      const seededState = context.currentAgentState
+        ? createIntentIntakeAgentState(context.currentAgentState)
+        : createIntentIntakeAgentState({
+            cumulativeText: context.cumulativeText,
+            resolutionState: context.resolutionState,
+            goalState: context.previousGoalState,
+            previousQuestion: context.previousQuestionTrace,
+            questionHistory: context.questionHistory ?? [],
+          });
+      const agentState = await updateAgentStateFromSignal(signal, seededState);
+      const nextAction = decideNextAction(agentState);
+      const analysis = agentState.latestAnalysis ?? context.previousAnalysis;
+      if (!analysis) {
+        throw new Error('processIntakeSignal: comparison-selection requires previous analysis or existing cumulative text.');
+      }
+      return {
+        ...analysis,
+        semanticMapping: agentState.latestSemanticMapping,
+        agentState: { ...agentState, nextAction },
+        nextAction,
+      };
+    }
+
     case "text": {
       const seededState = context.currentAgentState
         ? createIntentIntakeAgentState(context.currentAgentState)
