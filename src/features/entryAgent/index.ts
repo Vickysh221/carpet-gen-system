@@ -81,6 +81,7 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     interpretation: interpretationLayer,
     semanticCanvas,
     retrieval: retrievalLayer,
+    proposalFeedbackSignals: input.proposalFeedbackSignals,
   });
   const { questionCandidates, questionPlan, displayPlan, frontstageResponsePlan } = await buildDisplayAwarePlan({
     queryText: normalizedEvent.normalizedText,

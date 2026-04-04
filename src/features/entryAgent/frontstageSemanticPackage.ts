@@ -7,6 +7,7 @@ import type {
   InterpretationHandle,
   InterpretationLayerResult,
   MisleadingPath,
+  ProposalFeedbackSignal,
   RetrievalLayerResult,
 } from "./types";
 
@@ -83,12 +84,12 @@ function inferDomain(input: {
   const hasStone = text.includes("石头") || text.includes("肌理");
   const hasVague = route === "vague-underspecified" || text.includes("不确定") || text.includes("高级一点");
 
-  if (hasVague) return "vagueRefinementPreference";
   if (hasLavender) return "floralHerbalScent";
   if (hasStone) return "softMineralTexture";
   if (route === "mixed-compositional" || (hasBeach && hasLemonLeaf)) return "mixedImageryComposition";
   if (hasBeach) return "coastalAiryBrightness";
   if (hasRainThreshold || route === "poetic-atmospheric") return "moistThresholdAtmosphere";
+  if (hasVague) return "vagueRefinementPreference";
 
   const metaphoricDomains = input.semanticCanvas?.metaphoricDomains ?? [];
   if (metaphoricDomains.some((item) => item.toLowerCase().includes("coast"))) return "coastalAiryBrightness";
@@ -99,11 +100,37 @@ function inferDomain(input: {
   return "unknown";
 }
 
+function latestCorrectedDomain(signals?: ProposalFeedbackSignal[]) {
+  return [...(signals ?? [])].reverse().find((signal) => signal.correctedDomain)?.correctedDomain;
+}
+
+function latestDomainCorrectionSignal(signals?: ProposalFeedbackSignal[]) {
+  return [...(signals ?? [])].reverse().find((signal) => signal.correctedDomain);
+}
+
+function deriveFrontstageSeedText(input: {
+  queryText: string;
+  proposalFeedbackSignals?: ProposalFeedbackSignal[];
+}) {
+  const correctionSignal = latestDomainCorrectionSignal(input.proposalFeedbackSignals);
+  if (!correctionSignal?.sourceText?.trim()) {
+    return input.queryText;
+  }
+  return correctionSignal.sourceText.trim();
+}
+
 function inferDomainConfidence(input: {
   domain: InterpretationDomain;
   interpretation: InterpretationLayerResult;
   handles: InterpretationHandle[];
+  domainWasCorrected?: boolean;
 }): DomainConfidence {
+  if (input.domainWasCorrected) {
+    if (input.handles.length >= 3) return "high";
+    if (input.handles.length >= 2) return "medium";
+    return "low";
+  }
+
   const routeConfidence = input.interpretation.queryRoute.confidence;
   const unresolvedCount = input.interpretation.unresolvedSplits.length;
   const roleCount =
@@ -127,12 +154,26 @@ function buildHandles(input: {
   text: string;
   domain: InterpretationDomain;
   interpretation: InterpretationLayerResult;
+  domainWasCorrected?: boolean;
 }): InterpretationHandle[] {
   const text = normalizeForMatch(input.text);
   const handles: InterpretationHandle[] = [];
-  const roles = input.interpretation.semanticRoles;
+  const roles = input.domainWasCorrected
+    ? {
+        baseAtmosphere: [],
+        accentMotif: [],
+        sensoryModifiers: [],
+      }
+    : input.interpretation.semanticRoles;
 
-  if (text.includes("薰衣草")) {
+  const allowFloral = input.domain === "floralHerbalScent";
+  const allowMixed = input.domain === "mixedImageryComposition";
+  const allowCoastal = input.domain === "coastalAiryBrightness";
+  const allowMist = input.domain === "moistThresholdAtmosphere";
+  const allowVague = input.domain === "vagueRefinementPreference";
+  const allowMineral = input.domain === "softMineralTexture";
+
+  if (allowFloral && (text.includes("薰衣草") || text.includes("花香") || text.includes("芳香"))) {
     addIf(handles, createHandle({
       id: "lavender-scent",
       label: "草本花香轻轻浮出来",
@@ -148,6 +189,13 @@ function buildHandles(input: {
       plannerWeight: 0.82,
     }));
     addIf(handles, createHandle({
+      id: "lavender-botanical-trace",
+      label: "植物那层只留一点轻轻的影子",
+      kind: "trace",
+      sourceSignals: ["薰衣草", "植物"],
+      plannerWeight: 0.7,
+    }));
+    addIf(handles, createHandle({
       id: "scent-into-air",
       label: "香气融进空气里，不急着长成花形",
       kind: "modifier",
@@ -156,7 +204,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("加州") || text.includes("沙滩") || text.includes("海滩")) {
+  if ((allowMixed || allowCoastal) && (text.includes("加州") || text.includes("沙滩") || text.includes("海滩") || text.includes("海边"))) {
     addIf(handles, createHandle({
       id: "coastal-bright-air",
       label: "海边空气的亮和留白先成立",
@@ -166,7 +214,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("柠檬叶")) {
+  if (allowMixed && text.includes("柠檬叶")) {
     addIf(handles, createHandle({
       id: "lemon-leaf-trace",
       label: "叶感只留一点清绿苦感的痕迹",
@@ -176,7 +224,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("香气")) {
+  if ((allowFloral || allowMixed || allowCoastal) && (text.includes("香气") || text.includes("花香") || text.includes("芳香"))) {
     addIf(handles, createHandle({
       id: "scent-floating",
       label: "香气轻轻浮在表面，不立成对象",
@@ -186,7 +234,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("烟雨")) {
+  if ((allowMixed || allowMist) && (text.includes("烟雨") || text.includes("下雨前"))) {
     addIf(handles, createHandle({
       id: "mist-rain-field",
       label: "烟雨一样的湿润空气做底",
@@ -196,7 +244,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("竹影")) {
+  if (allowMixed && text.includes("竹影")) {
     addIf(handles, createHandle({
       id: "bamboo-shadow-trace",
       label: "竹影只留一点若有若无的线性影痕",
@@ -206,7 +254,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("一点")) {
+  if ((allowMixed || allowMist) && text.includes("一点")) {
     addIf(handles, createHandle({
       id: "low-presence",
       label: "那一点痕迹要轻，不要浮得太出来",
@@ -216,7 +264,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("花叶意向")) {
+  if (allowMixed && text.includes("花叶意向")) {
     addIf(handles, createHandle({
       id: "botanical-intent",
       label: "花叶只停在意向层，不需要长得很满",
@@ -226,7 +274,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("不要太满")) {
+  if ((allowMixed || allowVague) && text.includes("不要太满")) {
     addIf(handles, createHandle({
       id: "airy-breathing",
       label: "整体要有呼吸感，不能被花叶铺满",
@@ -236,7 +284,7 @@ function buildHandles(input: {
     }));
   }
 
-  if (text.includes("不确定") || text.includes("高级一点")) {
+  if (allowVague && (text.includes("不确定") || text.includes("高级一点"))) {
     addIf(handles, createHandle({
       id: "restrained-refinement",
       label: "更像在找一种克制但不单薄的高级感",
@@ -253,31 +301,139 @@ function buildHandles(input: {
     }));
   }
 
+  if (allowMineral && (text.includes("石头") || text.includes("肌理") || text.includes("别太硬"))) {
+    addIf(handles, createHandle({
+      id: "mineral-surface-soft",
+      label: "矿物表面感要在，但边缘是软的",
+      kind: "structure",
+      sourceSignals: ["石头", "肌理"],
+      plannerWeight: 0.92,
+    }));
+    addIf(handles, createHandle({
+      id: "mineral-density-softened",
+      label: "硬度要往回收，留下温一点的密度",
+      kind: "modifier",
+      sourceSignals: ["别太硬"],
+      plannerWeight: 0.86,
+    }));
+  }
+
   if (handles.length === 0) {
     const baseLabel = roles.baseAtmosphere[0]?.label;
     const accentLabel = roles.accentMotif[0]?.label;
     const sensoryLabel = roles.sensoryModifiers[0]?.label;
-    addIf(handles, baseLabel ? createHandle({
-      id: "base-atmosphere-fallback",
-      label: `整体先保住 ${baseLabel}`,
-      kind: "atmosphere",
-      sourceSignals: [baseLabel],
-      plannerWeight: 0.75,
-    }) : undefined);
-    addIf(handles, accentLabel ? createHandle({
-      id: "accent-trace-fallback",
-      label: `局部只留一点 ${accentLabel}`,
-      kind: "trace",
-      sourceSignals: [accentLabel],
-      plannerWeight: 0.7,
-    }) : undefined);
-    addIf(handles, sensoryLabel ? createHandle({
-      id: "sensory-fallback",
-      label: `${sensoryLabel} 更像融进空气里的感觉`,
-      kind: "modifier",
-      sourceSignals: [sensoryLabel],
-      plannerWeight: 0.74,
-    }) : undefined);
+
+    if (allowFloral) {
+      addIf(handles, createHandle({
+        id: "floral-scent-fallback",
+        label: "先留住草本花香浮出来的那层气息",
+        kind: "scent",
+        sourceSignals: [sensoryLabel ?? "花香"],
+        plannerWeight: 0.9,
+      }));
+      addIf(handles, createHandle({
+        id: "floral-air-fallback",
+        label: "香气先融进空气，不急着长成花形",
+        kind: "modifier",
+        sourceSignals: [baseLabel ?? "空气"],
+        plannerWeight: 0.84,
+      }));
+    }
+
+    if (allowMixed) {
+      addIf(handles, createHandle({
+        id: "mixed-atmosphere-fallback",
+        label: `整体先保住 ${baseLabel ?? "那层空气"}`,
+        kind: "atmosphere",
+        sourceSignals: [baseLabel ?? "空气"],
+        plannerWeight: 0.82,
+      }));
+      addIf(handles, createHandle({
+        id: "mixed-trace-fallback",
+        label: `局部只留一点 ${accentLabel ?? "轻痕迹"}`,
+        kind: "trace",
+        sourceSignals: [accentLabel ?? "痕迹"],
+        plannerWeight: 0.76,
+      }));
+    }
+
+    if (allowCoastal) {
+      addIf(handles, createHandle({
+        id: "coastal-air-fallback",
+        label: "先把通透空气和留白撑起来",
+        kind: "atmosphere",
+        sourceSignals: [baseLabel ?? "空气"],
+        plannerWeight: 0.9,
+      }));
+      addIf(handles, createHandle({
+        id: "coastal-scent-fallback",
+        label: "气息只是贴着空气走，不单独立起来",
+        kind: "modifier",
+        sourceSignals: [sensoryLabel ?? "气息"],
+        plannerWeight: 0.8,
+      }));
+    }
+
+    if (allowMist) {
+      addIf(handles, createHandle({
+        id: "mist-atmosphere-fallback",
+        label: "先留住将落未落的湿润空气",
+        kind: "atmosphere",
+        sourceSignals: [baseLabel ?? "空气"],
+        plannerWeight: 0.9,
+      }));
+      addIf(handles, createHandle({
+        id: "mist-presence-fallback",
+        label: "那一点存在感要贴着边走，别浮出来",
+        kind: "presence",
+        sourceSignals: [accentLabel ?? "一点"],
+        plannerWeight: 0.82,
+      }));
+    }
+
+    if (allowMineral) {
+      addIf(handles, createHandle({
+        id: "mineral-texture-fallback",
+        label: `先保住 ${baseLabel ?? "矿物表面感"}，但别让边缘变硬`,
+        kind: "structure",
+        sourceSignals: [baseLabel ?? "矿物"],
+        plannerWeight: 0.86,
+      }));
+    }
+
+    if (allowVague) {
+      addIf(handles, createHandle({
+        id: "vague-refinement-fallback",
+        label: "方向先别锁太死，把分寸感留住",
+        kind: "modifier",
+        sourceSignals: [baseLabel ?? "分寸"],
+        plannerWeight: 0.86,
+      }));
+    }
+
+    if (handles.length === 0) {
+      addIf(handles, baseLabel ? createHandle({
+        id: "base-atmosphere-fallback",
+        label: `整体先保住 ${baseLabel}`,
+        kind: "atmosphere",
+        sourceSignals: [baseLabel],
+        plannerWeight: 0.75,
+      }) : undefined);
+      addIf(handles, accentLabel ? createHandle({
+        id: "accent-trace-fallback",
+        label: `局部只留一点 ${accentLabel}`,
+        kind: "trace",
+        sourceSignals: [accentLabel],
+        plannerWeight: 0.7,
+      }) : undefined);
+      addIf(handles, sensoryLabel ? createHandle({
+        id: "sensory-fallback",
+        label: `${sensoryLabel} 更像融进空气里的感觉`,
+        kind: "modifier",
+        sourceSignals: [sensoryLabel],
+        plannerWeight: 0.74,
+      }) : undefined);
+    }
   }
 
   return dedupeByLabel(handles).slice(0, 6);
@@ -291,7 +447,7 @@ function buildCompositionAxes(input: {
   const text = normalizeForMatch(input.text);
   const axes: CompositionAxis[] = [];
 
-  if (text.includes("薰衣草")) {
+  if (input.domain === "floralHerbalScent" && (text.includes("薰衣草") || text.includes("花香") || text.includes("芳香"))) {
     axes.push(createAxis({
       id: "lavender-scent-vs-trace",
       label: "香气与植物痕迹的进入方式",
@@ -308,7 +464,7 @@ function buildCompositionAxes(input: {
     }));
   }
 
-  if (text.includes("加州") || text.includes("沙滩")) {
+  if ((input.domain === "mixedImageryComposition" || input.domain === "coastalAiryBrightness") && (text.includes("加州") || text.includes("沙滩") || text.includes("海边"))) {
     axes.push(createAxis({
       id: "coastal-air-vs-leaf-trace",
       label: "空气和叶感的主次",
@@ -318,7 +474,7 @@ function buildCompositionAxes(input: {
     }));
   }
 
-  if (text.includes("香气")) {
+  if ((input.domain === "floralHerbalScent" || input.domain === "mixedImageryComposition" || input.domain === "coastalAiryBrightness") && (text.includes("香气") || text.includes("花香") || text.includes("芳香"))) {
     axes.push(createAxis({
       id: "scent-diffusion-vs-trace-retention",
       label: "香气进入图样的方式",
@@ -328,7 +484,7 @@ function buildCompositionAxes(input: {
     }));
   }
 
-  if (text.includes("烟雨")) {
+  if ((input.domain === "mixedImageryComposition" || input.domain === "moistThresholdAtmosphere") && (text.includes("烟雨") || text.includes("下雨前"))) {
     axes.push(createAxis({
       id: "mist-vs-bamboo-shadow",
       label: "烟雨和竹影的主导关系",
@@ -338,7 +494,7 @@ function buildCompositionAxes(input: {
     }));
   }
 
-  if (text.includes("一点")) {
+  if ((input.domain === "mixedImageryComposition" || input.domain === "moistThresholdAtmosphere") && text.includes("一点")) {
     axes.push(createAxis({
       id: "trace-presence",
       label: "痕迹保留强度",
@@ -348,7 +504,7 @@ function buildCompositionAxes(input: {
     }));
   }
 
-  if (text.includes("不要太满")) {
+  if ((input.domain === "mixedImageryComposition" || input.domain === "vagueRefinementPreference") && text.includes("不要太满")) {
     axes.push(createAxis({
       id: "breathing-vs-cluster",
       label: "留白和局部聚集的比例",
@@ -358,7 +514,7 @@ function buildCompositionAxes(input: {
     }));
   }
 
-  if (text.includes("不确定") || text.includes("高级一点")) {
+  if (input.domain === "vagueRefinementPreference" && (text.includes("不确定") || text.includes("高级一点"))) {
     axes.push(createAxis({
       id: "restraint-vs-presence",
       label: "高级感的成立方式",
@@ -372,6 +528,16 @@ function buildCompositionAxes(input: {
       leftPole: "先偏抽象气质",
       rightPole: "只带一点轻对象痕迹",
       currentBias: "balanced",
+    }));
+  }
+
+  if (input.domain === "softMineralTexture" && (text.includes("石头") || text.includes("肌理") || text.includes("别太硬"))) {
+    axes.push(createAxis({
+      id: "mineral-density-vs-softness",
+      label: "矿物密度和软化程度",
+      leftPole: "保留材质感，但边缘更柔",
+      rightPole: "强调表面硬度和棱角",
+      currentBias: "left",
     }));
   }
 
@@ -393,20 +559,23 @@ function buildMisleadingPaths(input: {
   text: string;
   domain: InterpretationDomain;
   interpretation: InterpretationLayerResult;
+  domainWasCorrected?: boolean;
 }): MisleadingPath[] {
   const text = normalizeForMatch(input.text);
   const paths: MisleadingPath[] = [];
 
-  for (const label of input.interpretation.misleadingPathsToAvoid) {
-    const severity = label.includes("literal") || label.includes("scenic") ? "hard" : "soft";
-    paths.push(createMisleadingPath({
-      label,
-      reason: "interpretation layer 已经判断这条路径会把前台带进错误的成立方式。",
-      severity,
-    }));
+  if (!input.domainWasCorrected) {
+    for (const label of input.interpretation.misleadingPathsToAvoid) {
+      const severity = label.includes("literal") || label.includes("scenic") ? "hard" : "soft";
+      paths.push(createMisleadingPath({
+        label,
+        reason: "interpretation layer 已经判断这条路径会把前台带进错误的成立方式。",
+        severity,
+      }));
+    }
   }
 
-  if (text.includes("薰衣草")) {
+  if (input.domain === "floralHerbalScent") {
     paths.push(createMisleadingPath({
       label: "generic moist atmosphere",
       reason: "薰衣草的芳香不应直接塌成潮湿雾感；重点应是草本花香与香气气候。",
@@ -419,7 +588,7 @@ function buildMisleadingPaths(input: {
     }));
   }
 
-  if ((text.includes("加州") || text.includes("沙滩")) && text.includes("柠檬叶")) {
+  if (input.domain === "mixedImageryComposition" && ((text.includes("加州") || text.includes("沙滩") || text.includes("海边")) || text.includes("柠檬叶"))) {
     paths.push(createMisleadingPath({
       label: "coastal postcard rendering",
       reason: "海边空气应作为底子，而不是写实海景。",
@@ -432,7 +601,7 @@ function buildMisleadingPaths(input: {
     }));
   }
 
-  if (text.includes("烟雨") && text.includes("竹影")) {
+  if (input.domain === "mixedImageryComposition" && (text.includes("烟雨") || text.includes("竹影"))) {
     paths.push(createMisleadingPath({
       label: "bamboo forest scene illustration",
       reason: "竹影应停在影痕层，而不是导向竹林场景。",
@@ -445,7 +614,31 @@ function buildMisleadingPaths(input: {
     }));
   }
 
-  if (text.includes("不确定") || text.includes("高级一点")) {
+  if (input.domain === "coastalAiryBrightness") {
+    paths.push(createMisleadingPath({
+      label: "literal seaside postcard",
+      reason: "重点应是空气与亮度，不是把前台推成写实海报感。",
+      severity: "hard",
+    }));
+  }
+
+  if (input.domain === "moistThresholdAtmosphere") {
+    paths.push(createMisleadingPath({
+      label: "over-scenic rainy illustration",
+      reason: "前台应保留阈值空气感，而不是落入完整雨景叙事。",
+      severity: "hard",
+    }));
+  }
+
+  if (input.domain === "softMineralTexture") {
+    paths.push(createMisleadingPath({
+      label: "over-hard stone rendering",
+      reason: "矿物感成立不等于把边缘做硬做重。",
+      severity: "hard",
+    }));
+  }
+
+  if (input.domain === "vagueRefinementPreference") {
     paths.push(createMisleadingPath({
       label: "premature style locking",
       reason: "高级一点不应被提前锁成黑金、法式、中古等模板。",
@@ -483,31 +676,41 @@ export function buildFrontstageSemanticPackage(input: {
   interpretation: InterpretationLayerResult;
   semanticCanvas?: FuliSemanticCanvas;
   retrieval?: RetrievalLayerResult;
+  proposalFeedbackSignals?: ProposalFeedbackSignal[];
 }): FrontstageSemanticPackage {
-  const domain = inferDomain({
-    text: input.queryText,
+  const frontstageSeedText = deriveFrontstageSeedText({
+    queryText: input.queryText,
+    proposalFeedbackSignals: input.proposalFeedbackSignals,
+  });
+  const inferredDomain = inferDomain({
+    text: frontstageSeedText,
     interpretation: input.interpretation,
     semanticCanvas: input.semanticCanvas,
   });
+  const correctedDomain = latestCorrectedDomain(input.proposalFeedbackSignals);
+  const domain = correctedDomain ?? inferredDomain;
   const interpretationHandles = buildHandles({
-    text: input.queryText,
+    text: frontstageSeedText,
     domain,
     interpretation: input.interpretation,
+    domainWasCorrected: Boolean(correctedDomain),
   });
   const compositionAxes = buildCompositionAxes({
-    text: input.queryText,
+    text: frontstageSeedText,
     domain,
     interpretation: input.interpretation,
   });
   const misleadingPaths = buildMisleadingPaths({
-    text: input.queryText,
+    text: frontstageSeedText,
     domain,
     interpretation: input.interpretation,
+    domainWasCorrected: Boolean(correctedDomain),
   });
   const domainConfidence = inferDomainConfidence({
     domain,
     interpretation: input.interpretation,
     handles: interpretationHandles,
+    domainWasCorrected: Boolean(correctedDomain),
   });
 
   return {

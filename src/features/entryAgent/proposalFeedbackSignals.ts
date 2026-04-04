@@ -14,6 +14,51 @@ function unique(items: string[]) {
   return [...new Set(items)];
 }
 
+const REDUCE_CUES = [
+  "不要那么",
+  "别那么",
+  "少一点",
+  "减一点",
+  "弱一点",
+  "退一点",
+  "轻一点",
+  "收一点",
+  "压一点",
+  "先别那么重",
+  "别太重",
+  "再淡一点",
+  "往后收一点",
+];
+
+const BOOST_CUES = [
+  "多一点",
+  "再多一点",
+  "保留",
+  "更足一点",
+  "加强",
+  "多一些",
+  "多留一点",
+  "再留一点",
+  "更想留",
+  "留一点",
+  "留住",
+  "再明显一点",
+  "往前一点",
+];
+
+const DOMAIN_CORRECTION_CUES = [
+  "不是",
+  "更像",
+  "偏了",
+  "不太对",
+  "跑偏",
+  "抓偏",
+  "更想要",
+  "想要",
+  "往这边",
+  "这边",
+];
+
 function parseOrdinalMatches(text: string) {
   const matches: number[] = [];
   const digitMatches = [...text.matchAll(/\b([1-4])\b/g)].map((item) => Number(item[1]));
@@ -63,11 +108,18 @@ function inferCorrectedDomain(text: string): InterpretationDomain | undefined {
 
 function handleKeywords(handle: InterpretationHandle) {
   const keywords = new Set<string>();
+  if (handle.label.includes("海边") || handle.label.includes("沙滩")) {
+    keywords.add("海边");
+    keywords.add("沙滩");
+    keywords.add("海边那个");
+  }
   if (handle.label.includes("空气")) keywords.add("空气");
   if (handle.label.includes("香气") || handle.label.includes("气味")) {
     keywords.add("香气");
     keywords.add("气味");
     keywords.add("味道");
+    keywords.add("花香");
+    keywords.add("草本花香");
   }
   if (handle.label.includes("叶")) {
     keywords.add("叶");
@@ -86,13 +138,19 @@ function handleKeywords(handle: InterpretationHandle) {
   if (handle.kind === "scent") {
     keywords.add("香气");
     keywords.add("气味");
+    keywords.add("花香");
+    keywords.add("草本");
   }
   if (handle.kind === "atmosphere") {
     keywords.add("空气");
+    keywords.add("气候");
+    keywords.add("海边那个");
+    keywords.add("烟雨那层");
   }
   if (handle.kind === "presence") {
     keywords.add("轻");
     keywords.add("少一点");
+    keywords.add("退一点");
   }
   return [...keywords];
 }
@@ -103,6 +161,7 @@ function inferHandlesFromText(input: {
   mode: "boost" | "reduce";
 }) {
   const wantsScent = input.text.includes("香气") || input.text.includes("气味") || input.text.includes("味道");
+  const wantsFloral = input.text.includes("花香") || input.text.includes("草本");
   const wantsAir = input.text.includes("空气") || input.text.includes("烟雨") || input.text.includes("海边");
   const wantsTrace =
     input.text.includes("植物") ||
@@ -112,7 +171,7 @@ function inferHandlesFromText(input: {
     input.text.includes("痕迹");
 
   const matched = input.handles.filter((handle) => {
-    if (input.mode === "boost" && wantsScent) {
+    if (input.mode === "boost" && (wantsScent || wantsFloral)) {
       return handle.kind === "scent" || handle.label.includes("香气") || handle.label.includes("气味");
     }
     if (input.mode === "boost" && wantsAir) {
@@ -157,34 +216,35 @@ export function deriveProposalFeedbackSignal(input: {
     text.includes("blend");
   const blendedProposalIds = isBlend && selectedProposalIds.length >= 2 ? selectedProposalIds.slice(0, 2) : undefined;
 
-  const reduceCues = ["不要那么", "别那么", "少一点", "减一点", "弱一点", "退一点"];
-  const boostCues = ["多一点", "再多一点", "保留", "更足一点", "加强", "多一些"];
-
-  const reducedHandles = reduceCues.some((cue) => text.includes(cue))
+  const reducedHandles = REDUCE_CUES.some((cue) => text.includes(cue))
     ? inferHandlesFromText({
         text,
         handles: input.currentPackage.interpretationHandles,
         mode: "reduce",
       })
     : [];
-  const boostedHandles = boostCues.some((cue) => text.includes(cue))
+  const boostedHandles = BOOST_CUES.some((cue) => text.includes(cue))
     ? inferHandlesFromText({
         text,
         handles: input.currentPackage.interpretationHandles,
         mode: "boost",
       })
     : [];
+  const handleById = new Map(input.currentPackage.interpretationHandles.map((handle) => [handle.id, handle]));
+  const presenceLightnessHandles = reducedHandles.filter((handleId) => handleById.get(handleId)?.kind === "presence");
+  const normalizedReducedHandles = reducedHandles.filter((handleId) => handleById.get(handleId)?.kind !== "presence");
+  const normalizedBoostedHandles = unique([...boostedHandles, ...presenceLightnessHandles]);
 
   const correctedDomain =
-    text.includes("不是") || text.includes("更像")
+    DOMAIN_CORRECTION_CUES.some((cue) => text.includes(cue))
       ? inferCorrectedDomain(text)
       : undefined;
 
   const signal: ProposalFeedbackSignal = {
     selectedProposalIds: blendedProposalIds ? [] : selectedProposalIds,
     blendedProposalIds,
-    boostedHandles,
-    reducedHandles,
+    boostedHandles: normalizedBoostedHandles,
+    reducedHandles: normalizedReducedHandles,
     correctedDomain,
     sourceText: input.text,
   };

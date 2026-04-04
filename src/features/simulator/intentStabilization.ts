@@ -1,4 +1,18 @@
-import { buildDerivedEntryAnalysisFromAgentState, type ComparisonCandidate, type EntryAgentResult, type FuliSemanticCanvas, type HighValueField, type IntakeMacroSlot, type IntentIntakeAgentState, type IntentIntakeGoalState, type QuestionTrace, type TextIntakeSignal } from "@/features/entryAgent";
+import {
+  buildDerivedEntryAnalysisFromAgentState,
+  type ComparisonCandidate,
+  type CompositionProposal,
+  type EntryAgentResult,
+  type FuliSemanticCanvas,
+  type FrontstageResponsePlan,
+  type HighValueField,
+  type IntakeMacroSlot,
+  type IntentIntakeAgentState,
+  type IntentIntakeGoalState,
+  type QuestionTrace,
+  type RefinementPrompt,
+  type TextIntakeSignal,
+} from "@/features/entryAgent";
 import { processIntakeSignal } from "@/features/entryAgent/signalProcessor";
 import { renderPersonaUnderstanding } from "./personaRenderer";
 import { buildUnderstandingSummary, renderUnderstandingSummary } from "./understandingSummary";
@@ -44,6 +58,11 @@ interface IntentUnderstandingSnapshot {
   text: string;
   analysis: EntryAgentResult;
   replySnapshot: string;
+  optionalDomainCheck?: string;
+  compositionProposals: CompositionProposal[];
+  refinementPrompt?: RefinementPrompt;
+  /** Whether the snapshot is rendered from frontstageResponsePlan rather than legacy displayPlan. */
+  usesFrontstagePlan: boolean;
   comparisonCandidates: ComparisonCandidate[];
   currentUnderstanding: string;
   followUpQuestion?: string;
@@ -226,6 +245,39 @@ function getTargetedFollowUpQuestion(target: HighValueField | undefined) {
 
 function buildFollowUpQuestion(analysis: EntryAgentResult) {
   return getPrimaryAmbiguityQuestion(analysis) ?? getTargetedFollowUpQuestion(analysis.suggestedFollowUpTarget);
+}
+
+function getEffectiveFrontstagePlan(analysis: EntryAgentResult): FrontstageResponsePlan | undefined {
+  if (analysis.frontstageResponsePlan) {
+    return analysis.frontstageResponsePlan;
+  }
+
+  const comparisonCandidates = analysis.displayPlan?.comparisonCandidates ?? [];
+  const followUpQuestion = analysis.displayPlan?.whetherToAskQuestion
+    ? analysis.displayPlan.followUpQuestion ?? analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis)
+    : undefined;
+
+  return {
+    replySnapshot: analysis.displayPlan?.replySnapshot ?? buildSnapshotSentence({ analysis }),
+    compositionProposals: comparisonCandidates.map((candidate, index) => ({
+      id: candidate.id,
+      title: `方向 ${index + 1}`,
+      summary: candidate.curatedDisplayText,
+      dominantHandles: [candidate.intendedSplitDimension],
+      blendNotes: [candidate.semanticDeltaHint],
+    })),
+    refinementPrompt: followUpQuestion
+      ? {
+          mode: "nudge",
+          text: followUpQuestion,
+          allowedActions: ["choose-proposal", "blend-proposals", "boost-handle", "reduce-handle"],
+        }
+      : {
+          mode: "nudge",
+          text: "你可以告诉我更像哪种，也可以说哪一层该再轻一点。",
+          allowedActions: ["choose-proposal", "blend-proposals", "boost-handle", "reduce-handle"],
+        },
+  };
 }
 
 function getSemanticUnderstandingNarrative(analysis: EntryAgentResult) {
@@ -510,25 +562,34 @@ function buildExpertReply(input: {
   analysis: EntryAgentResult;
   cumulativeCanvas?: FuliSemanticCanvas;
   answerAlignment?: AnswerAlignment;
-  nextQuestion?: string;
+  frontstagePlan?: FrontstageResponsePlan;
+  fallbackQuestion?: string;
 }) {
-  const nextQuestion = input.nextQuestion ? trimQuestionPrompt(input.nextQuestion) : undefined;
+  const frontstagePlan = input.frontstagePlan ?? getEffectiveFrontstagePlan(input.analysis);
+  const nextQuestion = frontstagePlan?.refinementPrompt?.text
+    ? trimQuestionPrompt(frontstagePlan.refinementPrompt.text)
+    : input.fallbackQuestion
+      ? trimQuestionPrompt(input.fallbackQuestion)
+      : undefined;
+  const domainCheck = frontstagePlan?.optionalDomainCheck?.trim();
   const lines =
     input.source !== "text"
       ? [
-          buildChoiceInterpretationSentence({
+          frontstagePlan?.replySnapshot ?? buildChoiceInterpretationSentence({
             userText: input.userText,
             analysis: input.analysis,
             cumulativeCanvas: input.cumulativeCanvas,
           }),
           buildChoiceEffectSentence(input.analysis),
+          domainCheck,
           nextQuestion ? `我现在只想先确认这一件事：${nextQuestion}` : undefined,
         ].filter((item): item is string => Boolean(item))
       : [
-          buildSnapshotSentence({
+          frontstagePlan?.replySnapshot ?? buildSnapshotSentence({
             analysis: input.analysis,
             cumulativeCanvas: input.cumulativeCanvas,
           }),
+          domainCheck,
           nextQuestion
             ? `${buildQuestionLead({
                 analysis: input.analysis,
@@ -598,11 +659,20 @@ export async function buildIntentStabilizationSnapshot({
   };
   const cumulativeCanvas = mergeSemanticCanvas(previousSnapshot?.conversationState.cumulativeCanvas, analysis.semanticCanvas);
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
-  const selectedPrompt = analysis.displayPlan?.followUpQuestion ?? analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
-  const replySnapshot = analysis.displayPlan?.replySnapshot ?? buildSnapshotSentence({
+  const frontstagePlan = getEffectiveFrontstagePlan(analysis);
+  const usesFrontstagePlan = Boolean(analysis.frontstageResponsePlan);
+  const selectedPrompt =
+    frontstagePlan?.refinementPrompt.text ??
+    analysis.displayPlan?.followUpQuestion ??
+    analysis.questionPlan?.selectedQuestion.prompt ??
+    buildFollowUpQuestion(analysis);
+  const replySnapshot = frontstagePlan?.replySnapshot ?? buildSnapshotSentence({
     analysis,
     cumulativeCanvas,
   });
+  const optionalDomainCheck = frontstagePlan?.optionalDomainCheck;
+  const compositionProposals = frontstagePlan?.compositionProposals ?? [];
+  const refinementPrompt = frontstagePlan?.refinementPrompt;
   const comparisonCandidates = analysis.displayPlan?.comparisonCandidates ?? [];
   const currentUnderstanding = buildCumulativeUnderstanding({
     analysis,
@@ -616,7 +686,8 @@ export async function buildIntentStabilizationSnapshot({
     analysis,
     cumulativeCanvas,
     answerAlignment,
-    nextQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
+    frontstagePlan,
+    fallbackQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
   });
   const nextQuestionHistory = analysis.agentState?.questionHistory ?? previousQuestionHistory;
   const conversationState: IntentConversationState = {
@@ -651,9 +722,13 @@ export async function buildIntentStabilizationSnapshot({
     text,
     analysis,
     replySnapshot,
+    optionalDomainCheck,
+    compositionProposals,
+    refinementPrompt,
+    usesFrontstagePlan,
     comparisonCandidates,
     currentUnderstanding,
-    followUpQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
+    followUpQuestion: refinementPrompt?.text ?? (analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined),
     expertReply,
     readyToGenerate,
     turnCount,
@@ -676,16 +751,25 @@ export function buildIntentStabilizationSnapshotFromAgentState(input: {
   const readyToGenerate = shouldGenerateNow(analysis, turnCount);
   const committedText = input.committedReplyText?.trim() ?? "";
   const text = committedText ? joinUserTexts(input.previousText, committedText) : (input.previousText ?? "");
-  const selectedPrompt = analysis.displayPlan?.followUpQuestion ?? analysis.questionPlan?.selectedQuestion.prompt ?? buildFollowUpQuestion(analysis);
+  const frontstagePlan = getEffectiveFrontstagePlan(analysis);
+  const usesFrontstagePlan = Boolean(analysis.frontstageResponsePlan);
+  const selectedPrompt =
+    frontstagePlan?.refinementPrompt.text ??
+    analysis.displayPlan?.followUpQuestion ??
+    analysis.questionPlan?.selectedQuestion.prompt ??
+    buildFollowUpQuestion(analysis);
   const answerAlignment = {
     status: "initial" as const,
     introducedFields: analysis.hitFields,
     note: "这一轮通过 opening 选项先建立了主方向。",
   };
-  const replySnapshot = analysis.displayPlan?.replySnapshot ?? buildSnapshotSentence({
+  const replySnapshot = frontstagePlan?.replySnapshot ?? buildSnapshotSentence({
     analysis,
     cumulativeCanvas,
   });
+  const optionalDomainCheck = frontstagePlan?.optionalDomainCheck;
+  const compositionProposals = frontstagePlan?.compositionProposals ?? [];
+  const refinementPrompt = frontstagePlan?.refinementPrompt;
   const comparisonCandidates = analysis.displayPlan?.comparisonCandidates ?? [];
   const currentUnderstanding = buildCumulativeUnderstanding({
     analysis,
@@ -699,16 +783,21 @@ export function buildIntentStabilizationSnapshotFromAgentState(input: {
     analysis,
     cumulativeCanvas,
     answerAlignment,
-    nextQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
+    frontstagePlan,
+    fallbackQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
   });
 
   return {
     text,
     analysis,
     replySnapshot,
+    optionalDomainCheck,
+    compositionProposals,
+    refinementPrompt,
+    usesFrontstagePlan,
     comparisonCandidates,
     currentUnderstanding,
-    followUpQuestion: analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined,
+    followUpQuestion: refinementPrompt?.text ?? (analysis.displayPlan?.whetherToAskQuestion ? selectedPrompt : undefined),
     expertReply,
     readyToGenerate,
     turnCount,

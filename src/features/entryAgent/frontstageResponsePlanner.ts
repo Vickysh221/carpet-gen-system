@@ -20,6 +20,141 @@ function sortedHandles(handles: InterpretationHandle[]) {
   return [...handles].sort((left, right) => (right.plannerWeight ?? 0) - (left.plannerWeight ?? 0));
 }
 
+function unique(items: string[]) {
+  return [...new Set(items)];
+}
+
+function shortenHandleLabel(handle: InterpretationHandle | undefined, fallback: string) {
+  if (!handle?.label) return fallback;
+  return handle.label
+    .replace(/，.*/u, "")
+    .replace(/。.*/u, "")
+    .replace(/只留一点/u, "留一点")
+    .replace(/轻轻/u, "")
+    .replace(/不急着长成花形/u, "")
+    .trim();
+}
+
+function buildRegeneratedTitle(input: {
+  dominantHandles: string[];
+  handles: InterpretationHandle[];
+}) {
+  const handleByLabel = new Map(input.handles.map((handle) => [handle.label, handle]));
+  const lead = shortenHandleLabel(handleByLabel.get(input.dominantHandles[0]), "先把重点放前面");
+  const accent = input.dominantHandles[1]
+    ? shortenHandleLabel(handleByLabel.get(input.dominantHandles[1]), "再把第二层带出来")
+    : undefined;
+  return buildProposalTitle({
+    lead: `先留 ${lead}`,
+    accent: accent ? `再带 ${accent}` : undefined,
+  });
+}
+
+function buildRegeneratedSummary(input: {
+  dominantHandles: string[];
+  suppressedHandles: string[];
+  handles: InterpretationHandle[];
+}) {
+  const handleByLabel = new Map(input.handles.map((handle) => [handle.label, handle]));
+  const lead = shortenHandleLabel(handleByLabel.get(input.dominantHandles[0]), "重点");
+  const second = input.dominantHandles[1]
+    ? shortenHandleLabel(handleByLabel.get(input.dominantHandles[1]), "第二层")
+    : undefined;
+  const suppressed = input.suppressedHandles[0]
+    ? shortenHandleLabel(handleByLabel.get(input.suppressedHandles[0]), "其他痕迹")
+    : undefined;
+
+  if (second && suppressed) {
+    return `${lead} 放前面，${second} 做第二层，${suppressed} 先收在后面，整轮会更贴着这条重点走。`;
+  }
+  if (second) {
+    return `${lead} 放前面，${second} 做第二层，整轮先按这条主次关系往前推。`;
+  }
+  if (suppressed) {
+    return `${lead} 放前面，${suppressed} 先收住，整轮先把主语气拉清楚。`;
+  }
+  return `${lead} 放前面，整轮先顺着这层意思往前推。`;
+}
+
+function scoreHandleLabels(input: {
+  proposal: CompositionProposal;
+  handles: InterpretationHandle[];
+  boostedLabels: string[];
+  reducedLabels: string[];
+}) {
+  const scores = new Map<string, number>();
+  const handleByLabel = new Map(input.handles.map((handle) => [handle.label, handle]));
+
+  for (const handle of input.handles) {
+    scores.set(handle.label, handle.plannerWeight ?? 0.5);
+  }
+  for (const label of input.proposal.dominantHandles) {
+    scores.set(label, (scores.get(label) ?? 0) + 0.8);
+  }
+  for (const label of input.proposal.suppressedHandles ?? []) {
+    scores.set(label, (scores.get(label) ?? 0) - 0.5);
+  }
+  for (const label of input.boostedLabels) {
+    scores.set(label, (scores.get(label) ?? 0) + 1.2);
+  }
+  for (const label of input.reducedLabels) {
+    scores.set(label, (scores.get(label) ?? 0) - 1.4);
+  }
+
+  return [...scores.entries()]
+    .sort((left, right) => {
+      if (right[1] !== left[1]) return right[1] - left[1];
+      return (handleByLabel.get(left[0])?.plannerWeight ?? 0) - (handleByLabel.get(right[0])?.plannerWeight ?? 0);
+    })
+    .map(([label]) => label);
+}
+
+function buildProposalEmphasisState(input: {
+  proposal: CompositionProposal;
+  handles: InterpretationHandle[];
+  boostedLabels: string[];
+  reducedLabels: string[];
+}) {
+  const boostedSet = new Set(input.boostedLabels);
+  const reducedSet = new Set(input.reducedLabels);
+  const rankedLabels = scoreHandleLabels(input);
+
+  const dominantHandles = rankedLabels
+    .filter((label) => !reducedSet.has(label))
+    .slice(0, 2);
+
+  const suppressedHandles = unique([
+    ...input.reducedLabels,
+    ...(input.proposal.suppressedHandles ?? []),
+    ...rankedLabels.slice(2),
+  ])
+    .filter((label) => !dominantHandles.includes(label) && !boostedSet.has(label))
+    .slice(0, 2);
+
+  const title = buildRegeneratedTitle({
+    dominantHandles,
+    handles: input.handles,
+  });
+  const summary = buildRegeneratedSummary({
+    dominantHandles,
+    suppressedHandles,
+    handles: input.handles,
+  });
+  const blendNotes = unique([
+    ...(input.boostedLabels[0] ? [`这一轮先放大 ${input.boostedLabels[0]}`] : []),
+    ...(input.reducedLabels[0] ? [`先把 ${input.reducedLabels[0]} 收后一点`] : []),
+    ...(input.proposal.blendNotes ?? []),
+  ]).slice(0, 3);
+
+  return {
+    dominantHandles,
+    suppressedHandles,
+    title,
+    summary,
+    blendNotes,
+  };
+}
+
 function pickReplySnapshot(input: { pkg: FrontstageSemanticPackage }) {
   const { pkg } = input;
   const handles = sortedHandles(pkg.interpretationHandles);
@@ -69,10 +204,10 @@ function buildOptionalDomainCheck(input: { pkg: FrontstageSemanticPackage }) {
   }
 
   if (pkg.domainConfidence === "medium") {
-    return "要是不完全是这味道，你就轻轻拨我一下。";
+    return "要是我刚才抓偏了，你就把我往你更想要的那层轻轻拨回来。";
   }
 
-  return "这里我还想再听你一句，不然太容易替你说满了。";
+  return "这里还有几层意思贴得很近，我先不想替你说满，你只要告诉我哪层该更靠前就行。";
 }
 
 function buildProposalTitle(input: {
@@ -102,6 +237,31 @@ function createProposal(input: {
   };
 }
 
+function collectFeedbackWeights(signals?: ProposalFeedbackSignal[]) {
+  const recentSignals = (signals ?? []).slice(-6);
+  const proposalWeights = new Map<string, number>();
+  const handleWeights = new Map<string, number>();
+
+  recentSignals.forEach((signal, index) => {
+    const recency = 1 + index * 0.2;
+
+    for (const proposalId of signal.selectedProposalIds ?? []) {
+      proposalWeights.set(proposalId, (proposalWeights.get(proposalId) ?? 0) + 18 * recency);
+    }
+    for (const proposalId of signal.blendedProposalIds ?? []) {
+      proposalWeights.set(proposalId, (proposalWeights.get(proposalId) ?? 0) + 14 * recency);
+    }
+    for (const handleId of signal.boostedHandles ?? []) {
+      handleWeights.set(handleId, (handleWeights.get(handleId) ?? 0) + 0.16 * recency);
+    }
+    for (const handleId of signal.reducedHandles ?? []) {
+      handleWeights.set(handleId, (handleWeights.get(handleId) ?? 0) - 0.2 * recency);
+    }
+  });
+
+  return { proposalWeights, handleWeights };
+}
+
 function applyFeedbackToPackage(input: {
   pkg: FrontstageSemanticPackage;
   feedbackSignals?: ProposalFeedbackSignal[];
@@ -111,18 +271,12 @@ function applyFeedbackToPackage(input: {
     return input.pkg;
   }
 
-  const latestCorrectedDomain = [...signals].reverse().find((signal) => signal.correctedDomain)?.correctedDomain;
-  const boostedHandleIds = new Set(signals.flatMap((signal) => signal.boostedHandles ?? []));
-  const reducedHandleIds = new Set(signals.flatMap((signal) => signal.reducedHandles ?? []));
+  const { handleWeights } = collectFeedbackWeights(signals);
 
   return {
     ...input.pkg,
-    interpretationDomain: latestCorrectedDomain ?? input.pkg.interpretationDomain,
-    domainConfidence: latestCorrectedDomain ? "medium" : input.pkg.domainConfidence,
     interpretationHandles: input.pkg.interpretationHandles.map((handle) => {
-      let plannerWeight = handle.plannerWeight ?? 0.5;
-      if (boostedHandleIds.has(handle.id)) plannerWeight += 0.12;
-      if (reducedHandleIds.has(handle.id)) plannerWeight -= 0.12;
+      const plannerWeight = (handle.plannerWeight ?? 0.5) + (handleWeights.get(handle.id) ?? 0);
       return {
         ...handle,
         plannerWeight: Number(Math.max(0.1, Math.min(1, plannerWeight)).toFixed(2)),
@@ -141,26 +295,22 @@ function rerankProposalsByFeedback(input: {
     return input.proposals;
   }
 
-  const selectedIds = new Set(signals.flatMap((signal) => signal.selectedProposalIds ?? []));
-  const blendedIds = new Set(signals.flatMap((signal) => signal.blendedProposalIds ?? []));
-  const boostedIds = new Set(signals.flatMap((signal) => signal.boostedHandles ?? []));
-  const reducedIds = new Set(signals.flatMap((signal) => signal.reducedHandles ?? []));
+  const { proposalWeights, handleWeights } = collectFeedbackWeights(signals);
   const handleLabelById = new Map(input.handles.map((handle) => [handle.id, handle.label]));
 
   return [...input.proposals].sort((left, right) => {
     const scoreProposal = (proposal: CompositionProposal) => {
-      let score = 0;
-      if (selectedIds.has(proposal.id)) score += 20;
-      if (blendedIds.has(proposal.id)) score += 16;
+      let score = proposalWeights.get(proposal.id) ?? 0;
 
-      for (const handleId of boostedIds) {
+      for (const [handleId, weight] of handleWeights.entries()) {
         const label = handleLabelById.get(handleId);
-        if (label && proposal.dominantHandles.includes(label)) score += 8;
-      }
-      for (const handleId of reducedIds) {
-        const label = handleLabelById.get(handleId);
-        if (label && proposal.dominantHandles.includes(label)) score -= 8;
-        if (label && proposal.suppressedHandles?.includes(label)) score += 4;
+        if (!label) continue;
+        if (proposal.dominantHandles.includes(label)) {
+          score += weight > 0 ? weight * 48 : weight * 72;
+        }
+        if (proposal.suppressedHandles?.includes(label)) {
+          score += weight > 0 ? weight * -20 : Math.abs(weight) * 32;
+        }
       }
       return score;
     };
@@ -169,10 +319,49 @@ function rerankProposalsByFeedback(input: {
   });
 }
 
+function regenerateProposalByFeedback(input: {
+  proposal: CompositionProposal;
+  handles: InterpretationHandle[];
+  feedbackSignals?: ProposalFeedbackSignal[];
+}): CompositionProposal {
+  const signals = input.feedbackSignals ?? [];
+  if (signals.length === 0) {
+    return input.proposal;
+  }
+
+  const handleById = new Map(input.handles.map((handle) => [handle.id, handle]));
+  const boostedLabels = unique(
+    signals.flatMap((signal) => signal.boostedHandles ?? [])
+      .map((handleId) => handleById.get(handleId)?.label)
+      .filter((label): label is string => Boolean(label)),
+  );
+  const reducedLabels = unique(
+    signals.flatMap((signal) => signal.reducedHandles ?? [])
+      .map((handleId) => handleById.get(handleId)?.label)
+      .filter((label): label is string => Boolean(label)),
+  );
+  const emphasisState = buildProposalEmphasisState({
+    proposal: input.proposal,
+    handles: input.handles,
+    boostedLabels,
+    reducedLabels,
+  });
+
+  return {
+    ...input.proposal,
+    title: emphasisState.title,
+    dominantHandles: emphasisState.dominantHandles,
+    suppressedHandles: emphasisState.suppressedHandles.length > 0 ? emphasisState.suppressedHandles : undefined,
+    summary: emphasisState.summary,
+    blendNotes: emphasisState.blendNotes,
+  };
+}
+
 function buildFloralHerbalScentProposals(pkg: FrontstageSemanticPackage): CompositionProposal[] {
   const scent = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "scent" })[0]?.label ?? "草本花香轻轻浮出来";
   const color = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "colorClimate" })[0]?.label ?? "柔紫灰的香气气候";
   const modifier = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "modifier" })[0]?.label ?? "香气融进空气里";
+  const trace = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "trace" })[0]?.label ?? "植物那层只留一点轻轻的影子";
 
   return [
     createProposal({
@@ -194,8 +383,8 @@ function buildFloralHerbalScentProposals(pkg: FrontstageSemanticPackage): Compos
     createProposal({
       id: "proposal-floral-trace-light",
       title: "留一点植物的影子",
-      summary: `${scent} 还是最前面的那层，只在局部留一点植物痕迹，让它别完全退成空气，但也别长成花田。`,
-      dominantHandles: [scent],
+      summary: `${scent} 还是最前面的那层，${trace} 只在局部轻轻搭一下，让它别完全退成空气，但也别长成花田。`,
+      dominantHandles: [scent, trace],
       suppressedHandles: [modifier],
       blendNotes: ["可以把痕迹再降一点", "也可以把香气再散开一点"],
     }),
@@ -296,6 +485,79 @@ function buildVagueRefinementProposals(pkg: FrontstageSemanticPackage): Composit
   ];
 }
 
+function buildCoastalAiryProposals(pkg: FrontstageSemanticPackage): CompositionProposal[] {
+  const atmosphere = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "atmosphere" })[0]?.label ?? "先把通透空气撑起来";
+  const scent = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "scent" })[0]?.label;
+  const modifier = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "modifier" })[0]?.label ?? "气息贴着空气走";
+
+  return [
+    createProposal({
+      id: "proposal-coastal-air-first",
+      title: "先把空气放前面",
+      summary: `${atmosphere}，其余味道都先贴着边走，画面不去讲海景，只讲亮度和呼吸感怎么成立。`,
+      dominantHandles: scent ? [atmosphere, scent] : [atmosphere, modifier],
+      suppressedHandles: scent ? [modifier] : undefined,
+      blendNotes: ["可以再白一点", "也可以留一点轻轻的气息"],
+    }),
+    createProposal({
+      id: "proposal-coastal-scent-breath",
+      title: "让气息轻轻靠近",
+      summary: `${modifier}，但还是被 ${atmosphere} 托着，不会变成对象或景别，更像空气里刚好路过的一口味道。`,
+      dominantHandles: scent ? [modifier, atmosphere] : [atmosphere],
+      suppressedHandles: scent ? [scent] : undefined,
+      blendNotes: ["可以把气息再收淡一点", "也可以让空气更开一些"],
+    }),
+  ];
+}
+
+function buildMoistThresholdProposals(pkg: FrontstageSemanticPackage): CompositionProposal[] {
+  const atmosphere = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "atmosphere" })[0]?.label ?? "先留住将落未落的空气";
+  const presence = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "presence" })[0]?.label ?? "那一点存在感要贴着边";
+
+  return [
+    createProposal({
+      id: "proposal-mist-threshold-air",
+      title: "先留阈值空气",
+      summary: `${atmosphere}，其他痕迹都收在边上，重点不是下雨场景，而是湿度快要落下来的那一刻。`,
+      dominantHandles: [atmosphere, presence],
+      suppressedHandles: undefined,
+      blendNotes: ["可以再轻一点", "也可以让表面天气再近一点"],
+    }),
+    createProposal({
+      id: "proposal-mist-threshold-edge",
+      title: "边缘只动一点",
+      summary: `${presence}，所以你会先感到空气，再慢慢发现边上有一点要出现但还没完全出现的东西。`,
+      dominantHandles: [presence, atmosphere],
+      suppressedHandles: undefined,
+      blendNotes: ["可以继续收着", "也可以让边缘再明一点"],
+    }),
+  ];
+}
+
+function buildSoftMineralProposals(pkg: FrontstageSemanticPackage): CompositionProposal[] {
+  const texture = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "structure" })[0]?.label ?? "保住矿物表面感";
+  const modifier = topHandlesByKind({ handles: pkg.interpretationHandles, kind: "modifier" })[0]?.label ?? "把硬度往回收";
+
+  return [
+    createProposal({
+      id: "proposal-mineral-soft-surface",
+      title: "保住表面感，但别硬",
+      summary: `${texture}，${modifier}，整体更像温一点的密度，而不是石头被刻得很重。`,
+      dominantHandles: [texture, modifier],
+      suppressedHandles: undefined,
+      blendNotes: ["可以再软一点", "也可以把材质感再抬一点"],
+    }),
+    createProposal({
+      id: "proposal-mineral-muted-density",
+      title: "让密度轻一点",
+      summary: `${modifier} 放前面，材质感退后一点，画面会更克制，不会掉进硬朗装饰感。`,
+      dominantHandles: [modifier, texture],
+      suppressedHandles: undefined,
+      blendNotes: ["可以更细腻一点", "也可以再保留一点纹理"],
+    }),
+  ];
+}
+
 function buildDefaultProposals(pkg: FrontstageSemanticPackage): CompositionProposal[] {
   const handles = sortedHandles(pkg.interpretationHandles);
   const first = handles[0]?.label ?? "先保住最前面的那层感觉";
@@ -331,6 +593,12 @@ function buildCompositionProposals(input: { pkg: FrontstageSemanticPackage }): C
     proposals = buildFloralHerbalScentProposals(pkg);
   } else if (pkg.interpretationDomain === "mixedImageryComposition") {
     proposals = buildMixedImageryProposals(pkg);
+  } else if (pkg.interpretationDomain === "coastalAiryBrightness") {
+    proposals = buildCoastalAiryProposals(pkg);
+  } else if (pkg.interpretationDomain === "moistThresholdAtmosphere") {
+    proposals = buildMoistThresholdProposals(pkg);
+  } else if (pkg.interpretationDomain === "softMineralTexture") {
+    proposals = buildSoftMineralProposals(pkg);
   } else if (pkg.interpretationDomain === "vagueRefinementPreference") {
     proposals = buildVagueRefinementProposals(pkg);
   } else {
@@ -349,22 +617,22 @@ function buildRefinementPrompt(input: { pkg: FrontstageSemanticPackage }): Refin
   if (input.pkg.domainConfidence === "low") {
     return {
       mode: "domain-check",
-      text: "你怎么看？",
-      allowedActions: ["correct-domain", "choose-proposal"],
+      text: "你可以告诉我，现在更像香气本身、空气里的气候，还是只剩一点轻痕迹；也可以直接说哪层被我听偏了。",
+      allowedActions: ["correct-domain", "choose-proposal", "boost-handle", "reduce-handle"],
     };
   }
 
   if (input.pkg.domainConfidence === "medium") {
     return {
       mode: "nudge",
-      text: "说说看？",
+      text: "你可以直接说更靠近哪一种，也可以把两种揉在一起，再告诉我哪一层想多一点、少一点。",
       allowedActions: ["choose-proposal", "blend-proposals", "boost-handle", "reduce-handle", "correct-domain"],
     };
   }
 
   return {
     mode: "blend",
-    text: "你觉得呢？",
+    text: "你可以告诉我更像哪一种，或者拿两种混一下，再说哪一层该更轻、哪一层该往前一点。",
     allowedActions: ["choose-proposal", "blend-proposals", "boost-handle", "reduce-handle"],
   };
 }
@@ -379,7 +647,13 @@ export function buildFrontstageResponsePlan(input: {
   });
   const replySnapshot = pickReplySnapshot({ pkg: effectivePackage });
   const optionalDomainCheck = buildOptionalDomainCheck({ pkg: effectivePackage });
-  const rawProposals = buildCompositionProposals({ pkg: effectivePackage });
+  const rawProposals = buildCompositionProposals({ pkg: effectivePackage }).map((proposal) =>
+    regenerateProposalByFeedback({
+      proposal,
+      handles: effectivePackage.interpretationHandles,
+      feedbackSignals: input.feedbackSignals,
+    }),
+  );
   const compositionProposals = rerankProposalsByFeedback({
     proposals: rawProposals,
     feedbackSignals: input.feedbackSignals,
