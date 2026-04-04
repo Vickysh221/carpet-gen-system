@@ -2,6 +2,7 @@ import { buildDirectInterpretationCandidates } from "./directHitInterpretation";
 import { buildFallbackCandidateSet } from "./fallbackCandidateGenerator";
 import { detectHighValueFieldHits } from "./fieldHitDetection";
 import { deriveFollowUpRecommendation } from "./followUpRecommendation";
+import { buildFrontstageSemanticPackage } from "./frontstageSemanticPackage";
 import { normalizeTextInputEvent } from "./inputLayer";
 import { interpretRetrievedQuery } from "./interpretationLayer";
 import { mergeInterpretationCandidates } from "./prototypeMerge";
@@ -75,7 +76,13 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     updatedSlotStates,
     resolutionState,
   });
-  const { questionCandidates, questionPlan, displayPlan } = await buildDisplayAwarePlan({
+  const frontstageSemanticPackage = buildFrontstageSemanticPackage({
+    queryText: normalizedEvent.normalizedText,
+    interpretation: interpretationLayer,
+    semanticCanvas,
+    retrieval: retrievalLayer,
+  });
+  const { questionCandidates, questionPlan, displayPlan, frontstageResponsePlan } = await buildDisplayAwarePlan({
     queryText: normalizedEvent.normalizedText,
     semanticGaps,
     previousQuestion: input.previousQuestionTrace,
@@ -84,7 +91,9 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     hitFields: detection.hitFields,
     interpretation: interpretationLayer,
     retrieval: retrievalLayer,
+    frontstageSemanticPackage,
     comparisonSelections: input.comparisonSelections,
+    proposalFeedbackSignals: input.proposalFeedbackSignals,
     latestReplyText: input.latestReplyText,
     resolutionState,
     latestResolution,
@@ -112,6 +121,8 @@ export async function analyzeEntryText(input: EntryAgentInput): Promise<EntryAge
     interpretationMerge,
     ...bridge,
     semanticUnderstanding,
+    frontstageSemanticPackage,
+    frontstageResponsePlan,
     semanticGaps,
     questionCandidates,
     questionPlan,
@@ -143,3 +154,6 @@ export * from "./retrievalLayer";
 export * from "./interpretationLayer";
 export * from "./planningLayer";
 export * from "./compilerLayer";
+export * from "./frontstageSemanticPackage";
+export * from "./frontstageResponsePlanner";
+export * from "./proposalFeedbackSignals";

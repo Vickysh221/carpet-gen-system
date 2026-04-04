@@ -1,4 +1,5 @@
-import type { ComparisonSelectionRecord, EntryAgentResult, NextQuestionCandidate, QuestionPlan, QuestionResolution, QuestionResolutionState, QuestionTrace, RetrievalLayerResult, DisplayPlan, SemanticGap, InterpretationLayerResult } from "./types";
+import type { ComparisonSelectionRecord, EntryAgentResult, NextQuestionCandidate, QuestionPlan, QuestionResolution, QuestionResolutionState, QuestionTrace, RetrievalLayerResult, DisplayPlan, SemanticGap, InterpretationLayerResult, FrontstageResponsePlan, FrontstageSemanticPackage, ProposalFeedbackSignal } from "./types";
+import { buildFrontstageResponsePlan } from "./frontstageResponsePlanner";
 import { buildQuestionPlan } from "./questionPlanning";
 
 export async function buildDisplayAwarePlan(input: {
@@ -13,14 +14,17 @@ export async function buildDisplayAwarePlan(input: {
   latestResolution?: QuestionResolution;
   interpretation: InterpretationLayerResult;
   retrieval: RetrievalLayerResult;
+  frontstageSemanticPackage: FrontstageSemanticPackage;
   comparisonSelections?: ComparisonSelectionRecord[];
+  proposalFeedbackSignals?: ProposalFeedbackSignal[];
 }): Promise<{
   questionCandidates: NextQuestionCandidate[];
   questionPlan?: QuestionPlan;
   displayPlan: DisplayPlan;
+  frontstageResponsePlan: FrontstageResponsePlan;
   resolutionState?: QuestionResolutionState;
 }> {
-  return buildQuestionPlan({
+  const plan = await buildQuestionPlan({
     queryText: input.queryText,
     semanticGaps: input.semanticGaps,
     previousQuestion: input.previousQuestion,
@@ -35,4 +39,12 @@ export async function buildDisplayAwarePlan(input: {
     resolutionState: input.resolutionState,
     latestResolution: input.latestResolution,
   });
+
+  return {
+    ...plan,
+    frontstageResponsePlan: buildFrontstageResponsePlan({
+      pkg: input.frontstageSemanticPackage,
+      feedbackSignals: input.proposalFeedbackSignals,
+    }),
+  };
 }

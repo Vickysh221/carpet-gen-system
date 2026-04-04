@@ -427,6 +427,7 @@ export interface EntryAgentInput {
   latestReplyText?: string;
   resolutionState?: QuestionResolutionState;
   comparisonSelections?: ComparisonSelectionRecord[];
+  proposalFeedbackSignals?: ProposalFeedbackSignal[];
   /** Previous goal state — used to detect slot phase transitions (e.g. lock-candidate). */
   previousGoalState?: IntentIntakeGoalState;
 }
@@ -488,6 +489,94 @@ export interface SemanticUnderstanding {
   narrative: string;
   /** true when narrative is a fallback placeholder — no resolved readings were found */
   isWeakNarrative: boolean;
+}
+
+export type InterpretationDomain =
+  | "floralHerbalScent"
+  | "coastalAiryBrightness"
+  | "moistThresholdAtmosphere"
+  | "softMineralTexture"
+  | "vagueRefinementPreference"
+  | "mixedImageryComposition"
+  | "unknown";
+
+export type DomainConfidence = "high" | "medium" | "low";
+
+export interface InterpretationHandle {
+  id: string;
+  label: string;
+  kind:
+    | "atmosphere"
+    | "trace"
+    | "scent"
+    | "colorClimate"
+    | "structure"
+    | "presence"
+    | "modifier";
+  userFacing: true;
+  sourceSignals?: string[];
+  plannerWeight?: number;
+}
+
+export interface CompositionAxis {
+  id: string;
+  label: string;
+  leftPole: string;
+  rightPole: string;
+  currentBias?: "left" | "right" | "balanced";
+  blendable: true;
+}
+
+export interface MisleadingPath {
+  label: string;
+  reason: string;
+  severity: "soft" | "hard";
+}
+
+export interface FrontstageSemanticPackage {
+  interpretationDomain: InterpretationDomain;
+  domainConfidence: DomainConfidence;
+  interpretationHandles: InterpretationHandle[];
+  compositionAxes: CompositionAxis[];
+  misleadingPaths: MisleadingPath[];
+  plannerNotes?: string[];
+}
+
+export interface CompositionProposal {
+  id: string;
+  title: string;
+  summary: string;
+  dominantHandles: string[];
+  suppressedHandles?: string[];
+  blendNotes?: string[];
+}
+
+export interface RefinementPrompt {
+  mode: "blend" | "nudge" | "domain-check";
+  text: string;
+  allowedActions?: Array<
+    | "choose-proposal"
+    | "blend-proposals"
+    | "boost-handle"
+    | "reduce-handle"
+    | "correct-domain"
+  >;
+}
+
+export interface FrontstageResponsePlan {
+  replySnapshot: string;
+  optionalDomainCheck?: string;
+  compositionProposals: CompositionProposal[];
+  refinementPrompt: RefinementPrompt;
+}
+
+export interface ProposalFeedbackSignal {
+  selectedProposalIds?: string[];
+  blendedProposalIds?: string[];
+  boostedHandles?: string[];
+  reducedHandles?: string[];
+  correctedDomain?: InterpretationDomain;
+  sourceText?: string;
 }
 
 export interface SemanticGap {
@@ -769,6 +858,7 @@ export interface IntentIntakeAgentState {
   latestSemanticMapping?: IntentSemanticMapping;
   latestAnalysis?: EntryAgentResult;
   comparisonSelections: ComparisonSelectionRecord[];
+  proposalFeedbackSignals: ProposalFeedbackSignal[];
   nextAction?: AgentNextAction;
   lastSignalType?: IntakeSignal["type"];
 }
@@ -956,6 +1046,8 @@ export interface DisplayPlan {
 
 export interface EntryAgentSemanticPlanningResult {
   semanticUnderstanding: SemanticUnderstanding;
+  frontstageSemanticPackage?: FrontstageSemanticPackage;
+  frontstageResponsePlan?: FrontstageResponsePlan;
   semanticGaps: SemanticGap[];
   questionCandidates: NextQuestionCandidate[];
   questionPlan?: QuestionPlan;

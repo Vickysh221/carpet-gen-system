@@ -1,6 +1,7 @@
 import { analyzeEntryText } from "./index";
 import { normalizeTextInputEvent } from "./inputLayer";
 import { applyOpeningSelectionToAgentState } from "./openingOptionDelta";
+import { deriveProposalFeedbackSignal } from "./proposalFeedbackSignals";
 import { routeEntryQuery } from "./queryRouting";
 import type {
   AgentNextAction,
@@ -784,6 +785,7 @@ export function createIntentIntakeAgentState(seed: Partial<IntentIntakeAgentStat
     latestSemanticMapping: seed.latestSemanticMapping,
     latestAnalysis: seed.latestAnalysis,
     comparisonSelections: seed.comparisonSelections ?? [],
+    proposalFeedbackSignals: seed.proposalFeedbackSignals ?? [],
     nextAction: seed.nextAction,
     lastSignalType: seed.lastSignalType,
   };
@@ -853,6 +855,7 @@ function buildNextAgentState(input: {
     latestSemanticMapping: buildIntentSemanticMappingFromAnalysis(input.analysis),
     latestAnalysis: input.analysis,
     comparisonSelections: input.currentState.comparisonSelections,
+    proposalFeedbackSignals: input.currentState.proposalFeedbackSignals,
     lastSignalType: input.signal.type,
   };
 }
@@ -892,6 +895,7 @@ export async function updateAgentStateFromSignal(
       previousGoalState: state.goalState,
       questionHistory: state.questionHistory,
       comparisonSelections,
+      proposalFeedbackSignals: state.proposalFeedbackSignals,
     });
 
     const nextState = buildNextAgentState({
@@ -914,6 +918,14 @@ export async function updateAgentStateFromSignal(
   }
 
   const cumulativeText = joinUserTexts(state.cumulativeText, signal.text);
+  const proposalFeedbackSignal = deriveProposalFeedbackSignal({
+    text: signal.text,
+    currentPlan: state.latestAnalysis?.frontstageResponsePlan,
+    currentPackage: state.latestAnalysis?.frontstageSemanticPackage,
+  });
+  const proposalFeedbackSignals = proposalFeedbackSignal
+    ? [...state.proposalFeedbackSignals, proposalFeedbackSignal].slice(-12)
+    : state.proposalFeedbackSignals;
   const analysis = await analyzeEntryText({
     text: cumulativeText,
     slotStates: deriveLegacySlotStates(state),
@@ -923,14 +935,19 @@ export async function updateAgentStateFromSignal(
     previousGoalState: state.goalState,
     questionHistory: state.questionHistory,
     comparisonSelections: state.comparisonSelections,
+    proposalFeedbackSignals,
   });
 
-  return buildNextAgentState({
+  const nextState = buildNextAgentState({
     analysis,
     currentState: state,
     signal,
     cumulativeText,
   });
+  return {
+    ...nextState,
+    proposalFeedbackSignals,
+  };
 }
 
 export function decideNextAction(agentState: IntentIntakeAgentState): AgentNextAction {
