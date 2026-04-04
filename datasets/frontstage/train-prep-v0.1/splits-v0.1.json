@@ -1,0 +1,80 @@
+{
+  "package": {
+    "trainIds": [
+      "pkg-001",
+      "pkg-002",
+      "pkg-003",
+      "pkg-004",
+      "pkg-005",
+      "pkg-006",
+      "pkg-007",
+      "pkg-008",
+      "pkg-010",
+      "pkg-011",
+      "pkg-012",
+      "pkg-013",
+      "pkg-015",
+      "pkg-017",
+      "pkg-019",
+      "pkg-020",
+      "pkg-022",
+      "pkg-023",
+      "pkg-024",
+      "pkg-026",
+      "pkg-027",
+      "pkg-028",
+      "pkg-029"
+    ],
+    "validationIds": [
+      "pkg-009",
+      "pkg-014",
+      "pkg-016",
+      "pkg-018",
+      "pkg-021",
+      "pkg-025"
+    ]
+  },
+  "feedbackSignals": {
+    "trainIds": [
+      "fb-001",
+      "fb-002",
+      "fb-003",
+      "fb-005",
+      "fb-006",
+      "fb-007",
+      "fb-008",
+      "fb-010",
+      "fb-012",
+      "fb-013",
+      "fb-014",
+      "fb-015",
+      "fb-016",
+      "fb-017",
+      "fb-018",
+      "fb-020"
+    ],
+    "validationIds": [
+      "fb-004",
+      "fb-009",
+      "fb-011",
+      "fb-019",
+      "fb-021",
+      "fb-022"
+    ]
+  },
+  "closedLoop": {
+    "trainingTarget": false,
+    "regressionEvalIds": [
+      "cl-001",
+      "cl-002",
+      "cl-003",
+      "cl-004",
+      "cl-005",
+      "cl-006",
+      "cl-007",
+      "cl-008",
+      "cl-009",
+      "cl-010"
+    ]
+  }
+}

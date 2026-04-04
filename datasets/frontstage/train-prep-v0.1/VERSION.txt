@@ -1,0 +1,2 @@
+train-prep-v0.1
+Frozen package/feedback snapshot for formal training preparation after stabilization.

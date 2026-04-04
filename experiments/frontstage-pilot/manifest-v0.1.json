@@ -1,0 +1,25 @@
+{
+  "experimentId": "frontstage-pilot-v0.1",
+  "createdFor": "Training Pilot Setup v0.1",
+  "snapshotPath": "datasets/frontstage/pilot-v0.1",
+  "tasks": [
+    {
+      "id": "package-task",
+      "dataset": "datasets/frontstage/pilot-v0.1/package/gold-v0.1.jsonl",
+      "splitStrategy": "leave-one-out",
+      "baselineScript": "scripts/run-frontstage-package-baseline.mjs",
+      "resultPath": "experiments/frontstage-pilot/results/package-baseline-v0.1.json"
+    },
+    {
+      "id": "feedback-task",
+      "dataset": "datasets/frontstage/pilot-v0.1/feedback-signals/gold-v0.1.jsonl",
+      "splitStrategy": "leave-one-out",
+      "baselineScript": "scripts/run-frontstage-feedback-baseline.mjs",
+      "resultPath": "experiments/frontstage-pilot/results/feedback-baseline-v0.1.json"
+    }
+  ],
+  "notes": [
+    "Response-plan generation is deliberately excluded from this pilot.",
+    "Closed-loop data is included in the snapshot for future tasks, not as the primary pilot target."
+  ]
+}

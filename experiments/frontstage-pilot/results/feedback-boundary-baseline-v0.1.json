@@ -1,0 +1,652 @@
+{
+  "summary": {
+    "task": "feedback-task",
+    "baseline": "rule-based boundary baseline",
+    "dataset": "datasets/frontstage/pilot-v0.1/feedback-signals/gold-v0.1.jsonl",
+    "sampleCount": 22,
+    "exactMatchAccuracy": 0.1364,
+    "selectedProposalAccuracy": 0.7273,
+    "blendedProposalAccuracy": 0.9545,
+    "boostedHandlesAccuracy": 0.2727,
+    "reducedHandlesAccuracy": 0.5909,
+    "correctedDomainAccuracy": 0.9545,
+    "observations": [
+      "This baseline is intentionally aligned to explicit boundary language rather than nearest-neighbor copying.",
+      "If this baseline materially outperforms nearest-neighbor, the main bottleneck is likely evaluator weakness rather than unresolved boundary ambiguity.",
+      "If corrected-domain still stays low here, the dataset still needs more decisive domain-exit supervision."
+    ]
+  },
+  "details": [
+    {
+      "id": "fb-001",
+      "inputText": "加州沙滩和柠檬叶的香气",
+      "feedbackText": "我更偏第二种，不过空气想再多留一点，叶子先别那么重。",
+      "goldSignal": {
+        "selectedProposalIds": [
+          "proposal-mixed-trace-first"
+        ],
+        "boostedHandles": [
+          "coastal-bright-air"
+        ],
+        "reducedHandles": [
+          "lemon-leaf-trace"
+        ],
+        "sourceText": "我更偏第二种，不过空气想再多留一点，叶子先别那么重。"
+      },
+      "predictedSignal": {
+        "sourceText": "我更偏第二种，不过空气想再多留一点，叶子先别那么重。",
+        "reducedHandles": [
+          "lemon-leaf-trace"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": false,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-002",
+      "inputText": "薰衣草的芳香",
+      "feedbackText": "植物那层再退一点吧，我其实更想把花香多留一点。",
+      "goldSignal": {
+        "boostedHandles": [
+          "lavender-scent",
+          "scent-floating",
+          "scent-into-air"
+        ],
+        "reducedHandles": [
+          "lavender-botanical-trace"
+        ],
+        "sourceText": "植物那层再退一点吧，我其实更想把花香多留一点。"
+      },
+      "predictedSignal": {
+        "sourceText": "植物那层再退一点吧，我其实更想把花香多留一点。",
+        "reducedHandles": [
+          "lavender-botanical-trace"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-003",
+      "inputText": "加州沙滩和柠檬叶的香气",
+      "feedbackText": "另起一案吧，这次不要海边那组了，直接改走草本花香那边。",
+      "goldSignal": {
+        "correctedDomain": "floralHerbalScent",
+        "sourceText": "另起一案吧，这次不要海边那组了，直接改走草本花香那边。"
+      },
+      "predictedSignal": {
+        "sourceText": "另起一案吧，这次不要海边那组了，直接改走草本花香那边。",
+        "correctedDomain": "floralHerbalScent"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": true,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": true
+    },
+    {
+      "id": "fb-004",
+      "inputText": "烟雨里有一点竹影",
+      "feedbackText": "竹影还保留在原案里，只把它压轻一点，烟雨那层再往前一点。",
+      "goldSignal": {
+        "boostedHandles": [
+          "mist-rain-field",
+          "low-presence"
+        ],
+        "reducedHandles": [
+          "bamboo-shadow-trace"
+        ],
+        "sourceText": "竹影还保留在原案里，只把它压轻一点，烟雨那层再往前一点。"
+      },
+      "predictedSignal": {
+        "sourceText": "竹影还保留在原案里，只把它压轻一点，烟雨那层再往前一点。"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": false,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-005",
+      "inputText": "烟雨里有一点竹影",
+      "feedbackText": "第一种和第三种我想揉在一起，别太满，气还是松一点。",
+      "goldSignal": {
+        "blendedProposalIds": [
+          "proposal-mixed-atmosphere-first",
+          "proposal-mixed-low-presence"
+        ],
+        "sourceText": "第一种和第三种我想揉在一起，别太满，气还是松一点。"
+      },
+      "predictedSignal": {
+        "sourceText": "第一种和第三种我想揉在一起，别太满，气还是松一点。",
+        "blendedProposalIds": [
+          "proposal-mixed-atmosphere-first",
+          "proposal-mixed-low-presence"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": true,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": true
+    },
+    {
+      "id": "fb-006",
+      "inputText": "还不确定，想高级一点",
+      "feedbackText": "我更偏第一种，不过别太空，还是想留一点分量。",
+      "goldSignal": {
+        "selectedProposalIds": [
+          "proposal-vague-restrained"
+        ],
+        "boostedHandles": [
+          "restrained-refinement"
+        ],
+        "sourceText": "我更偏第一种，不过别太空，还是想留一点分量。"
+      },
+      "predictedSignal": {
+        "sourceText": "我更偏第一种，不过别太空，还是想留一点分量。"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": false,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-007",
+      "inputText": "石头肌理但别太硬",
+      "feedbackText": "我更偏第一种，不过再软一点，别让石头感顶得太前。",
+      "goldSignal": {
+        "selectedProposalIds": [
+          "proposal-mineral-soft-surface"
+        ],
+        "boostedHandles": [
+          "mineral-density-softened"
+        ],
+        "reducedHandles": [
+          "mineral-surface-soft"
+        ],
+        "sourceText": "我更偏第一种，不过再软一点，别让石头感顶得太前。"
+      },
+      "predictedSignal": {
+        "sourceText": "我更偏第一种，不过再软一点，别让石头感顶得太前。"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": false,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": false,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-008",
+      "inputText": "薰衣草的芳香",
+      "feedbackText": "就定第一种，不做混合，只把香气再散开一点。",
+      "goldSignal": {
+        "selectedProposalIds": [
+          "proposal-floral-scent-air"
+        ],
+        "boostedHandles": [
+          "scent-floating",
+          "scent-into-air"
+        ],
+        "sourceText": "就定第一种，不做混合，只把香气再散开一点。"
+      },
+      "predictedSignal": {
+        "sourceText": "就定第一种，不做混合，只把香气再散开一点。",
+        "selectedProposalIds": [
+          "proposal-floral-scent-air"
+        ],
+        "boostedHandles": [
+          "scent-floating",
+          "scent-into-air"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": true,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": true
+    },
+    {
+      "id": "fb-009",
+      "inputText": "薰衣草的芳香",
+      "feedbackText": "不要单选，我要把第一种和第二种直接揉成一案，颜色留着，植物影子再少一点。",
+      "goldSignal": {
+        "blendedProposalIds": [
+          "proposal-floral-scent-air",
+          "proposal-floral-scent-color"
+        ],
+        "boostedHandles": [
+          "lavender-purple-grey"
+        ],
+        "reducedHandles": [
+          "lavender-botanical-trace"
+        ],
+        "sourceText": "不要单选，我要把第一种和第二种直接揉成一案，颜色留着，植物影子再少一点。"
+      },
+      "predictedSignal": {
+        "sourceText": "不要单选，我要把第一种和第二种直接揉成一案，颜色留着，植物影子再少一点。",
+        "blendedProposalIds": [
+          "proposal-floral-scent-air",
+          "proposal-floral-scent-color"
+        ],
+        "reducedHandles": [
+          "lavender-botanical-trace"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-010",
+      "inputText": "加州沙滩和柠檬叶的香气",
+      "feedbackText": "就按第一种走，不混第三种，味道更连起来一点，叶感再轻一点。",
+      "goldSignal": {
+        "selectedProposalIds": [
+          "proposal-mixed-atmosphere-first"
+        ],
+        "boostedHandles": [
+          "coastal-bright-air",
+          "scent-floating"
+        ],
+        "reducedHandles": [
+          "lemon-leaf-trace"
+        ],
+        "sourceText": "就按第一种走，不混第三种，味道更连起来一点，叶感再轻一点。"
+      },
+      "predictedSignal": {
+        "sourceText": "就按第一种走，不混第三种，味道更连起来一点，叶感再轻一点。",
+        "selectedProposalIds": [
+          "proposal-mixed-atmosphere-first"
+        ],
+        "reducedHandles": [
+          "lemon-leaf-trace"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-011",
+      "inputText": "加州沙滩和柠檬叶的香气",
+      "feedbackText": "不要单选，我就是要把第一种和第三种拼在一起，空气别丢，香气往前一点。",
+      "goldSignal": {
+        "blendedProposalIds": [
+          "proposal-mixed-atmosphere-first",
+          "proposal-mixed-scent-led"
+        ],
+        "boostedHandles": [
+          "coastal-bright-air",
+          "scent-floating"
+        ],
+        "sourceText": "不要单选，我就是要把第一种和第三种拼在一起，空气别丢，香气往前一点。"
+      },
+      "predictedSignal": {
+        "sourceText": "不要单选，我就是要把第一种和第三种拼在一起，空气别丢，香气往前一点。",
+        "blendedProposalIds": [
+          "proposal-mixed-atmosphere-first",
+          "proposal-mixed-scent-led"
+        ],
+        "boostedHandles": [
+          "coastal-bright-air",
+          "scent-floating",
+          "scent-into-air"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-012",
+      "inputText": "还不确定，想高级一点",
+      "feedbackText": "我其实更偏第二种，别太空，但还是要克制。",
+      "goldSignal": {
+        "selectedProposalIds": [
+          "proposal-vague-presence"
+        ],
+        "boostedHandles": [
+          "restrained-refinement"
+        ],
+        "sourceText": "我其实更偏第二种，别太空，但还是要克制。"
+      },
+      "predictedSignal": {
+        "sourceText": "我其实更偏第二种，别太空，但还是要克制。"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": false,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-013",
+      "inputText": "花叶意向，但不要太满",
+      "feedbackText": "就留第一种，不要揉第二种，花叶那层再轻一点，空一点更好。",
+      "goldSignal": {
+        "selectedProposalIds": [
+          "proposal-botanical-breathing"
+        ],
+        "boostedHandles": [
+          "airy-breathing"
+        ],
+        "reducedHandles": [
+          "botanical-intent"
+        ],
+        "sourceText": "就留第一种，不要揉第二种，花叶那层再轻一点，空一点更好。"
+      },
+      "predictedSignal": {
+        "sourceText": "就留第一种，不要揉第二种，花叶那层再轻一点，空一点更好。"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": false,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": false,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-014",
+      "inputText": "花叶意向，但不要太满",
+      "feedbackText": "不要定成单一方案，我要把两种一起留，先有呼吸感，再带一点花叶意向。",
+      "goldSignal": {
+        "blendedProposalIds": [
+          "proposal-botanical-breathing",
+          "proposal-botanical-trace-first"
+        ],
+        "sourceText": "不要定成单一方案，我要把两种一起留，先有呼吸感，再带一点花叶意向。"
+      },
+      "predictedSignal": {
+        "sourceText": "不要定成单一方案，我要把两种一起留，先有呼吸感，再带一点花叶意向。"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": false,
+        "boostedHandles": true,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-015",
+      "inputText": "石头肌理但别太硬",
+      "feedbackText": "我更偏第二种，不过别太冷硬，还是要再软一点。",
+      "goldSignal": {
+        "selectedProposalIds": [
+          "proposal-mineral-muted-density"
+        ],
+        "boostedHandles": [
+          "mineral-density-softened"
+        ],
+        "reducedHandles": [
+          "mineral-surface-soft"
+        ],
+        "sourceText": "我更偏第二种，不过别太冷硬，还是要再软一点。"
+      },
+      "predictedSignal": {
+        "sourceText": "我更偏第二种，不过别太冷硬，还是要再软一点。"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": false,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": false,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-016",
+      "inputText": "烟雨里有一点竹影",
+      "feedbackText": "竹影这一支先作废，另起成纯雨前空气那案，不再留 trace。",
+      "goldSignal": {
+        "correctedDomain": "moistThresholdAtmosphere",
+        "reducedHandles": [
+          "bamboo-shadow-trace"
+        ],
+        "boostedHandles": [
+          "mist-rain-field"
+        ],
+        "sourceText": "竹影这一支先作废，另起成纯雨前空气那案，不再留 trace。"
+      },
+      "predictedSignal": {
+        "sourceText": "竹影这一支先作废，另起成纯雨前空气那案，不再留 trace。",
+        "correctedDomain": "moistThresholdAtmosphere"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": false,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-017",
+      "inputText": "海边那种被晒白的空气感",
+      "feedbackText": "不要单选，我要把第一种和第三种揉成同一版，通透要在，但别像海报那么满。",
+      "goldSignal": {
+        "blendedProposalIds": [
+          "proposal-coastal-open-air",
+          "proposal-coastal-muted-air"
+        ],
+        "boostedHandles": [
+          "coastal-bright-air"
+        ],
+        "sourceText": "不要单选，我要把第一种和第三种揉成同一版，通透要在，但别像海报那么满。"
+      },
+      "predictedSignal": {
+        "sourceText": "不要单选，我要把第一种和第三种揉成同一版，通透要在，但别像海报那么满。",
+        "blendedProposalIds": [
+          "proposal-coastal-open-air",
+          "proposal-coastal-muted-air"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-018",
+      "inputText": "下雨前五分钟的空气",
+      "feedbackText": "不要只定一种，我要把第一种和第三种叠在一起，压低感留着，但别太像真的要下。",
+      "goldSignal": {
+        "blendedProposalIds": [
+          "proposal-moist-threshold-air",
+          "proposal-moist-lower-presence"
+        ],
+        "boostedHandles": [
+          "mist-rain-field",
+          "low-presence"
+        ],
+        "sourceText": "不要只定一种，我要把第一种和第三种叠在一起，压低感留着，但别太像真的要下。"
+      },
+      "predictedSignal": {
+        "sourceText": "不要只定一种，我要把第一种和第三种叠在一起，压低感留着，但别太像真的要下。",
+        "blendedProposalIds": [
+          "proposal-moist-threshold-air",
+          "proposal-moist-lower-presence"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": true,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-019",
+      "inputText": "海边那种被晒白的空气感",
+      "feedbackText": "上一组 coastal 先整组作废，另起成下雨前压着的空气那一案。",
+      "goldSignal": {
+        "correctedDomain": "moistThresholdAtmosphere",
+        "reducedHandles": [
+          "coastal-bright-air",
+          "scent-floating"
+        ],
+        "sourceText": "上一组 coastal 先整组作废，另起成下雨前压着的空气那一案。"
+      },
+      "predictedSignal": {
+        "sourceText": "上一组 coastal 先整组作废，另起成下雨前压着的空气那一案。",
+        "correctedDomain": "coastalAiryBrightness"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": true,
+        "reducedHandles": false,
+        "correctedDomain": false
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-020",
+      "inputText": "下雨前五分钟的空气",
+      "feedbackText": "上一组 moist 先整组作废，另起成靠海亮白空气那一案。",
+      "goldSignal": {
+        "correctedDomain": "coastalAiryBrightness",
+        "reducedHandles": [
+          "mist-rain-field",
+          "low-presence"
+        ],
+        "sourceText": "上一组 moist 先整组作废，另起成靠海亮白空气那一案。"
+      },
+      "predictedSignal": {
+        "sourceText": "上一组 moist 先整组作废，另起成靠海亮白空气那一案。",
+        "correctedDomain": "coastalAiryBrightness"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": true,
+        "reducedHandles": false,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-021",
+      "inputText": "加州沙滩和柠檬叶的香气",
+      "feedbackText": "这组 mixed 先整组作废，另起 pure coastal 那一案，只留亮白空气。",
+      "goldSignal": {
+        "correctedDomain": "coastalAiryBrightness",
+        "reducedHandles": [
+          "lemon-leaf-trace",
+          "scent-floating"
+        ],
+        "boostedHandles": [
+          "coastal-bright-air"
+        ],
+        "sourceText": "这组 mixed 先整组作废，另起 pure coastal 那一案，只留亮白空气。"
+      },
+      "predictedSignal": {
+        "sourceText": "这组 mixed 先整组作废，另起 pure coastal 那一案，只留亮白空气。",
+        "correctedDomain": "coastalAiryBrightness"
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": false,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    },
+    {
+      "id": "fb-022",
+      "inputText": "海边那种被晒白的空气感",
+      "feedbackText": "我要把第二种和第三种混成一版，不单定某一个，亮还要在，但更空一点，别长成海景。",
+      "goldSignal": {
+        "blendedProposalIds": [
+          "proposal-coastal-bright-surface",
+          "proposal-coastal-muted-air"
+        ],
+        "boostedHandles": [
+          "coastal-bright-air"
+        ],
+        "reducedHandles": [
+          "scent-floating"
+        ],
+        "sourceText": "我要把第二种和第三种混成一版，不单定某一个，亮还要在，但更空一点，别长成海景。"
+      },
+      "predictedSignal": {
+        "sourceText": "我要把第二种和第三种混成一版，不单定某一个，亮还要在，但更空一点，别长成海景。",
+        "blendedProposalIds": [
+          "proposal-coastal-bright-surface",
+          "proposal-coastal-muted-air"
+        ]
+      },
+      "fieldMatches": {
+        "selectedProposalIds": true,
+        "blendedProposalIds": true,
+        "boostedHandles": false,
+        "reducedHandles": false,
+        "correctedDomain": true
+      },
+      "exactMatch": false
+    }
+  ]
+}

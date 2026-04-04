@@ -1,0 +1,38 @@
+{
+  "snapshotVersion": "train-prep-v0.1",
+  "createdAt": "2026-04-04T19:56:57.826Z",
+  "sourceGoldVersion": "frontstage gold v0.1 stabilized through Task 30",
+  "readinessCheckpoint": "docs/training-readiness-checkpoint-after-stabilization-pass-v0.1.md",
+  "linkedPilotSnapshot": "datasets/frontstage/pilot-v0.1/manifest-v0.1.json",
+  "schema": {
+    "legacy": "schema-v0.1.json",
+    "packageWithAuxiliarySupervision": "schema-v0.2.json"
+  },
+  "files": {
+    "package": {
+      "path": "package/gold-v0.1.jsonl",
+      "count": 29
+    },
+    "responsePlan": {
+      "path": "response-plan/gold-v0.1.jsonl",
+      "count": 6
+    },
+    "feedbackSignals": {
+      "path": "feedback-signals/gold-v0.1.jsonl",
+      "count": 22
+    },
+    "closedLoop": {
+      "path": "closed-loop/gold-v0.1.jsonl",
+      "count": 10
+    }
+  },
+  "baselineRoles": {
+    "packageNearestNeighbor": "coarse lexical boundary regression check for package learnability",
+    "feedbackNearestNeighbor": "weak retrieval-style continuity baseline retained for historical comparison only",
+    "feedbackBoundaryBaseline": "primary feedback task-structure separability gate for blend vs nudge vs corrected-domain"
+  },
+  "notes": [
+    "Baseline result files are generated on the refreshed pilot-v0.1 slice.",
+    "pilot-v0.1 and train-prep-v0.1 are synchronized from the same current gold files during cleanup and training preparation."
+  ]
+}

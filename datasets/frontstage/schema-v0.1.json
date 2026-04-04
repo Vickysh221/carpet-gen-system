@@ -1,0 +1,487 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://carpet-gen-system.local/datasets/frontstage/schema-v0.1.json",
+  "title": "Frontstage Gold Dataset Schema v0.1",
+  "type": "object",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/packageSample"
+    },
+    {
+      "$ref": "#/$defs/responsePlanSample"
+    },
+    {
+      "$ref": "#/$defs/feedbackSignalSample"
+    },
+    {
+      "$ref": "#/$defs/closedLoopSample"
+    }
+  ],
+  "$defs": {
+    "status": {
+      "type": "string",
+      "enum": ["seed", "curated"]
+    },
+    "commonMeta": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sampleType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "sourceCase": {
+          "type": "string"
+        },
+        "sourceRunner": {
+          "type": "string"
+        },
+        "difficultyTags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "sampleType",
+        "version",
+        "status",
+        "sourceCase",
+        "sourceRunner",
+        "difficultyTags",
+        "input",
+        "output",
+        "notes"
+      ]
+    },
+    "interpretationHandle": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "atmosphere",
+            "trace",
+            "scent",
+            "colorClimate",
+            "structure",
+            "presence",
+            "modifier"
+          ]
+        },
+        "userFacing": {
+          "type": "boolean",
+          "const": true
+        },
+        "sourceSignals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plannerWeight": {
+          "type": "number"
+        }
+      },
+      "required": ["id", "label", "kind", "userFacing"]
+    },
+    "compositionAxis": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "leftPole": {
+          "type": "string"
+        },
+        "rightPole": {
+          "type": "string"
+        },
+        "currentBias": {
+          "type": "string",
+          "enum": ["left", "right", "balanced"]
+        },
+        "blendable": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": ["id", "label", "leftPole", "rightPole", "blendable"]
+    },
+    "misleadingPath": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["soft", "hard"]
+        }
+      },
+      "required": ["label", "reason", "severity"]
+    },
+    "frontstageSemanticPackage": {
+      "type": "object",
+      "properties": {
+        "interpretationDomain": {
+          "type": "string",
+          "enum": [
+            "floralHerbalScent",
+            "coastalAiryBrightness",
+            "moistThresholdAtmosphere",
+            "softMineralTexture",
+            "vagueRefinementPreference",
+            "mixedImageryComposition",
+            "unknown"
+          ]
+        },
+        "domainConfidence": {
+          "type": "string",
+          "enum": ["high", "medium", "low"]
+        },
+        "interpretationHandles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/interpretationHandle"
+          }
+        },
+        "compositionAxes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/compositionAxis"
+          }
+        },
+        "misleadingPaths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/misleadingPath"
+          }
+        },
+        "plannerNotes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "interpretationDomain",
+        "domainConfidence",
+        "interpretationHandles",
+        "compositionAxes",
+        "misleadingPaths"
+      ]
+    },
+    "compositionProposal": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "dominantHandles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suppressedHandles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blendNotes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["id", "title", "summary", "dominantHandles"]
+    },
+    "refinementPrompt": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["blend", "nudge", "domain-check"]
+        },
+        "text": {
+          "type": "string"
+        },
+        "allowedActions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "choose-proposal",
+              "blend-proposals",
+              "boost-handle",
+              "reduce-handle",
+              "correct-domain"
+            ]
+          }
+        }
+      },
+      "required": ["mode", "text"]
+    },
+    "frontstageResponsePlan": {
+      "type": "object",
+      "properties": {
+        "replySnapshot": {
+          "type": "string"
+        },
+        "optionalDomainCheck": {
+          "type": "string"
+        },
+        "compositionProposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/compositionProposal"
+          }
+        },
+        "refinementPrompt": {
+          "$ref": "#/$defs/refinementPrompt"
+        }
+      },
+      "required": ["replySnapshot", "compositionProposals", "refinementPrompt"]
+    },
+    "proposalFeedbackSignal": {
+      "type": "object",
+      "properties": {
+        "selectedProposalIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blendedProposalIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "boostedHandles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reducedHandles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "correctedDomain": {
+          "type": "string",
+          "enum": [
+            "floralHerbalScent",
+            "coastalAiryBrightness",
+            "moistThresholdAtmosphere",
+            "softMineralTexture",
+            "vagueRefinementPreference",
+            "mixedImageryComposition",
+            "unknown"
+          ]
+        },
+        "sourceText": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "packageSample": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/commonMeta"
+        },
+        {
+          "properties": {
+            "sampleType": {
+              "const": "package"
+            },
+            "input": {
+              "type": "object",
+              "properties": {
+                "inputText": {
+                  "type": "string"
+                },
+                "context": {
+                  "type": "object"
+                }
+              },
+              "required": ["inputText"]
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "package": {
+                  "$ref": "#/$defs/frontstageSemanticPackage"
+                }
+              },
+              "required": ["package"]
+            }
+          }
+        }
+      ]
+    },
+    "responsePlanSample": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/commonMeta"
+        },
+        {
+          "properties": {
+            "sampleType": {
+              "const": "response-plan"
+            },
+            "input": {
+              "type": "object",
+              "properties": {
+                "inputText": {
+                  "type": "string"
+                },
+                "package": {
+                  "$ref": "#/$defs/frontstageSemanticPackage"
+                }
+              },
+              "required": ["inputText", "package"]
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "responsePlan": {
+                  "$ref": "#/$defs/frontstageResponsePlan"
+                }
+              },
+              "required": ["responsePlan"]
+            }
+          }
+        }
+      ]
+    },
+    "feedbackSignalSample": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/commonMeta"
+        },
+        {
+          "properties": {
+            "sampleType": {
+              "const": "feedback-signal"
+            },
+            "input": {
+              "type": "object",
+              "properties": {
+                "inputText": {
+                  "type": "string"
+                },
+                "previousPackage": {
+                  "$ref": "#/$defs/frontstageSemanticPackage"
+                },
+                "previousResponsePlan": {
+                  "$ref": "#/$defs/frontstageResponsePlan"
+                },
+                "userFeedbackText": {
+                  "type": "string"
+                }
+              },
+              "required": ["inputText", "previousResponsePlan", "userFeedbackText"]
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "proposalFeedbackSignal": {
+                  "$ref": "#/$defs/proposalFeedbackSignal"
+                }
+              },
+              "required": ["proposalFeedbackSignal"]
+            }
+          }
+        }
+      ]
+    },
+    "closedLoopSample": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/commonMeta"
+        },
+        {
+          "properties": {
+            "sampleType": {
+              "const": "closed-loop"
+            },
+            "input": {
+              "type": "object",
+              "properties": {
+                "inputText": {
+                  "type": "string"
+                },
+                "package": {
+                  "$ref": "#/$defs/frontstageSemanticPackage"
+                },
+                "responsePlan": {
+                  "$ref": "#/$defs/frontstageResponsePlan"
+                },
+                "feedbackText": {
+                  "type": "string"
+                },
+                "feedbackSignal": {
+                  "$ref": "#/$defs/proposalFeedbackSignal"
+                }
+              },
+              "required": ["inputText", "package", "responsePlan", "feedbackText", "feedbackSignal"]
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "nextPackage": {
+                  "$ref": "#/$defs/frontstageSemanticPackage"
+                },
+                "nextResponsePlan": {
+                  "$ref": "#/$defs/frontstageResponsePlan"
+                }
+              },
+              "required": ["nextPackage", "nextResponsePlan"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
